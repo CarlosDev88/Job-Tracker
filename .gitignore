@@ -4,3 +4,13 @@ icons/
 # Dev
 .DS_Store
 *.log
+
+raw_data/*.json
+.env
+__pycache__/
+*.pyc
+*.db
+node_modules/
+.venv/
+dist/
+.DS_Store
