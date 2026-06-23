@@ -1,0 +1,6 @@
+# Íconos generados (se regeneran con imagemagick)
+icons/
+
+# Dev
+.DS_Store
+*.log
