@@ -50,7 +50,7 @@ def filtrar_raw_data() -> dict:
                 data = json.load(f)
             items = data if isinstance(data, list) else data.get("vacantes", [])
             for item in items:
-                vacante = normalizar_vacante(item)
+                vacante = normalizar_vacante(item, fuente)
                 if vacante is not None:
                     vacante["fuente"] = fuente
                     vacantes.append(vacante)
