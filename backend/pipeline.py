@@ -106,9 +106,7 @@ def importar_raw_data() -> dict:
             total_stats["guardadas"] += stats.get("guardadas", 0)
             total_stats["duplicadas"] += stats.get("duplicadas", 0)
             total_stats["rechazadas"] += (
-                stats.get("blacklist", 0) +
-                stats.get("score_bajo", 0) +
-                stats.get("llm_rechazado", 0)
+                stats.get("total", 0) - stats.get("guardadas", 0) - stats.get("duplicadas", 0)
             )
 
         except Exception as e:
