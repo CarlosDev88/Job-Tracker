@@ -15,21 +15,6 @@ export default function Dashboard() {
             .catch(() => setLoading(false))
     }, [])
 
-    const runPipeline = async () => {
-        setRunning(true)
-        setPipelineResult(null)
-        try {
-            const res = await fetch(`${API}/pipeline/run`, { method: 'POST' })
-            const data = await res.json()
-            setPipelineResult(data)
-            const s = await fetch(`${API}/stats`).then(r => r.json())
-            setStats(s)
-        } catch (e) {
-            setPipelineResult({ error: e.message })
-        }
-        setRunning(false)
-    }
-
     const importRaw = async () => {
         setRunning(true)
         setPipelineResult(null)
@@ -49,22 +34,13 @@ export default function Dashboard() {
         <div className="max-w-4xl">
             <div className="flex items-center justify-between mb-6">
                 <h1 className="text-xl font-semibold">Dashboard</h1>
-                <div className="flex gap-2">
-                    <button
-                        onClick={importRaw}
-                        disabled={running}
-                        className="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 rounded transition-colors disabled:opacity-50"
-                    >
-                        📂 Importar extensión
-                    </button>
-                    <button
-                        onClick={runPipeline}
-                        disabled={running}
-                        className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 rounded transition-colors disabled:opacity-50"
-                    >
-                        {running ? 'Corriendo...' : '▶ Run pipeline'}
-                    </button>
-                </div>
+                <button
+                    onClick={importRaw}
+                    disabled={running}
+                    className="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 rounded transition-colors disabled:opacity-50"
+                >
+                    {running ? 'Importando...' : '📂 Importar extensión'}
+                </button>
             </div>
 
             {loading && <p className="text-zinc-400">Cargando...</p>}
@@ -94,7 +70,7 @@ export default function Dashboard() {
 
             {pipelineResult && (
                 <div className="bg-zinc-900 border border-zinc-800 rounded p-4">
-                    <h2 className="text-sm font-medium text-zinc-400 mb-2">Resultado pipeline</h2>
+                    <h2 className="text-sm font-medium text-zinc-400 mb-2">Resultado importación</h2>
                     <pre className="text-xs text-green-400 overflow-auto">
                         {JSON.stringify(pipelineResult, null, 2)}
                     </pre>
