@@ -17,7 +17,7 @@ from backend.database import (
     delete_aplicacion,
     get_stats,
 )
-from backend.pipeline import importar_raw_data
+from backend.pipeline import filtrar_raw_data, analizar_con_llm
 
 app = FastAPI(title="Job Tracker API", version="1.0.0")
 
@@ -122,10 +122,16 @@ def eliminar_aplicacion(app_id: int):
     delete_aplicacion(app_id)
 
 
-@app.post("/pipeline/importar-raw")
-def importar_raw():
-    """Procesa JSONs de raw_data/ generados por la extensión Chrome."""
-    return importar_raw_data()
+@app.post("/pipeline/filtrar")
+def filtrar():
+    """Etapa 1: aplica el filtro de keywords a raw_data/ y rankea el resultado en filtradas.json."""
+    return filtrar_raw_data()
+
+
+@app.post("/pipeline/analizar")
+def analizar():
+    """Etapa 2: corre el filtro semántico del LLM sobre filtradas.json y guarda en la DB."""
+    return analizar_con_llm()
 
 
 @app.get("/stats")

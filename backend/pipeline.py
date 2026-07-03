@@ -7,28 +7,88 @@ from backend.filtros.keywords import filtrar_vacante
 from backend.filtros.llm_filter import filtrar_con_llm
 
 RAW_DATA_PATH = os.getenv("RAW_DATA_PATH", "./raw_data")
+FILTRADAS_PATH = os.getenv("FILTRADAS_PATH", "./filtradas/filtradas.json")
 
 
-def procesar_vacantes(vacantes: list, fuente: str) -> dict:
+def filtrar_raw_data() -> dict:
     """
-    Corre el pipeline completo sobre una lista de vacantes.
-    
-    Pipeline:
-      Filtro 0: blacklist dura
-      Filtro 1: scoring por pesos
-      Filtro 2: LLM semántico (solo score >= 50)
-      → DB
-    
-    Retorna stats del procesamiento.
+    Etapa 1: lee todos los JSONs en raw_data/ (generados por la extensión Chrome),
+    aplica el filtro de keywords y sobrescribe filtradas.json con las que pasan,
+    rankeadas por score. No llama al LLM.
     """
     perfil = get_perfil_activo()
     if not perfil:
-        return {"error": "No hay perfil activo. Activa un perfil antes de correr el pipeline."}
+        return {"error": "No hay perfil activo. Activa un perfil antes de filtrar."}
+
+    pattern = os.path.join(RAW_DATA_PATH, "*.json")
+    archivos = glob.glob(pattern)
+
+    if not archivos:
+        return {"error": f"No hay archivos JSON en {RAW_DATA_PATH}"}
+
+    vacantes = []
+    for archivo in archivos:
+        try:
+            with open(archivo, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            vacantes.extend(data if isinstance(data, list) else data.get("vacantes", []))
+        except Exception as e:
+            print(f"Error leyendo {archivo}: {e}")
+
+    stats = {"total": len(vacantes)}
+    filtradas = []
+
+    for vacante in vacantes:
+        resultado = filtrar_vacante(vacante, perfil)
+
+        if not resultado["pasa"]:
+            stats[resultado["razon"]] = stats.get(resultado["razon"], 0) + 1
+            continue
+
+        filtradas.append({
+            "titulo": vacante.get("titulo", ""),
+            "empresa": vacante.get("empresa", ""),
+            "ubicacion": vacante.get("ubicacion", ""),
+            "descripcion": vacante.get("descripcion", ""),
+            "link": vacante.get("link", ""),
+            "fuente": "linkedin_extension",
+            "score": resultado["score"],
+            "detalle": resultado["detalle"],
+        })
+
+    filtradas.sort(key=lambda v: v["score"], reverse=True)
+
+    os.makedirs(os.path.dirname(FILTRADAS_PATH), exist_ok=True)
+    with open(FILTRADAS_PATH, "w", encoding="utf-8") as f:
+        json.dump(filtradas, f, ensure_ascii=False, indent=2)
+
+    stats["filtradas"] = len(filtradas)
+    stats["perfil"] = perfil["nombre"]
+    stats["timestamp"] = datetime.now().isoformat()
+    stats["ranking"] = filtradas
+    return stats
+
+
+def analizar_con_llm() -> dict:
+    """
+    Etapa 2: lee filtradas.json (salida de filtrar_raw_data) y corre el filtro
+    semántico del LLM configurado, guardando en la DB las que pasen.
+    """
+    perfil = get_perfil_activo()
+    if not perfil:
+        return {"error": "No hay perfil activo."}
+
+    if not os.path.exists(FILTRADAS_PATH):
+        return {"error": f"No hay vacantes filtradas en {FILTRADAS_PATH}. Corre el filtro primero."}
+
+    with open(FILTRADAS_PATH, "r", encoding="utf-8") as f:
+        filtradas = json.load(f)
+
+    if not filtradas:
+        return {"error": "El archivo de filtradas está vacío."}
 
     stats = {
-        "total": len(vacantes),
-        "blacklist": 0,
-        "score_bajo": 0,
+        "total": len(filtradas),
         "llm_rechazado": 0,
         "guardadas": 0,
         "duplicadas": 0,
@@ -36,15 +96,7 @@ def procesar_vacantes(vacantes: list, fuente: str) -> dict:
         "timestamp": datetime.now().isoformat(),
     }
 
-    for vacante in vacantes:
-        resultado = filtrar_vacante(vacante, perfil)
-
-        if not resultado["pasa"]:
-            stats[resultado["razon"]] = stats.get(resultado["razon"], 0) + 1
-            print(f"❌ [{resultado["razon"]}] score={resultado["score"]} | {vacante.get("titulo","")[:50]}")
-            continue
-
-        print(f"✅ score={resultado["score"]} | {vacante.get("titulo","")[:50]}")
+    for vacante in filtradas:
         llm_result = filtrar_con_llm(vacante, perfil)
 
         if not llm_result["pasa"]:
@@ -58,9 +110,9 @@ def procesar_vacantes(vacantes: list, fuente: str) -> dict:
             "ubicacion": vacante.get("ubicacion", ""),
             "descripcion": vacante.get("descripcion", ""),
             "link": vacante.get("link", ""),
-            "fuente": fuente,
-            "score": resultado["score"],
-            "score_detalle": resultado["detalle"],
+            "fuente": vacante.get("fuente", ""),
+            "score": vacante.get("score", 0),
+            "score_detalle": vacante.get("detalle", {}),
             "llm_razon": llm_result["razon"],
         })
 
@@ -70,46 +122,3 @@ def procesar_vacantes(vacantes: list, fuente: str) -> dict:
             stats["duplicadas"] += 1
 
     return stats
-
-
-def importar_raw_data() -> dict:
-    """
-    Lee todos los JSONs en raw_data/ (generados por la extensión Chrome)
-    y los pasa por el pipeline.
-    """
-    pattern = os.path.join(RAW_DATA_PATH, "*.json")
-    archivos = glob.glob(pattern)
-
-    if not archivos:
-        return {"error": f"No hay archivos JSON en {RAW_DATA_PATH}"}
-
-    total_stats = {
-        "archivos_procesados": 0,
-        "total": 0,
-        "guardadas": 0,
-        "duplicadas": 0,
-        "rechazadas": 0,
-    }
-
-    for archivo in archivos:
-        try:
-            with open(archivo, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            # Acepta tanto lista directa como { "vacantes": [...] }
-            vacantes = data if isinstance(data, list) else data.get("vacantes", [])
-            fuente = "linkedin_extension"
-
-            stats = procesar_vacantes(vacantes, fuente)
-            total_stats["archivos_procesados"] += 1
-            total_stats["total"] += stats.get("total", 0)
-            total_stats["guardadas"] += stats.get("guardadas", 0)
-            total_stats["duplicadas"] += stats.get("duplicadas", 0)
-            total_stats["rechazadas"] += (
-                stats.get("total", 0) - stats.get("guardadas", 0) - stats.get("duplicadas", 0)
-            )
-
-        except Exception as e:
-            total_stats[f"error_{os.path.basename(archivo)}"] = str(e)
-
-    return total_stats

@@ -6,6 +6,7 @@ icons/
 *.log
 
 raw_data/*.json
+filtradas/*.json
 .env
 __pycache__/
 *.pyc
