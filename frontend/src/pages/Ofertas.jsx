@@ -114,8 +114,8 @@ export default function Ofertas() {
                                 <div className="text-sm text-zinc-400">
                                     {oferta.empresa} {oferta.ubicacion && `· ${oferta.ubicacion}`}
                                 </div>
-                                {oferta.gemini_razon && (
-                                    <div className="text-xs text-zinc-500 mt-1">{oferta.gemini_razon}</div>
+                                {oferta.llm_razon && (
+                                    <div className="text-xs text-zinc-500 mt-1">{oferta.llm_razon}</div>
                                 )}
                                 {oferta.notas && (
                                     <div className="text-xs text-yellow-600 mt-1">📝 {oferta.notas}</div>

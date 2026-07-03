@@ -44,7 +44,7 @@ def init_db():
             fuente TEXT NOT NULL,
             score INTEGER DEFAULT 0,
             score_detalle TEXT,
-            gemini_razon TEXT,
+            llm_razon TEXT,
             estado TEXT DEFAULT 'pendiente',
             fecha_encontrada TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             fecha_aplicacion TIMESTAMP,
@@ -52,6 +52,10 @@ def init_db():
             FOREIGN KEY (perfil_id) REFERENCES perfiles(id)
         );
     """)
+
+    columnas = [row["name"] for row in cursor.execute("PRAGMA table_info(job_applications)")]
+    if "gemini_razon" in columnas and "llm_razon" not in columnas:
+        cursor.execute("ALTER TABLE job_applications RENAME COLUMN gemini_razon TO llm_razon")
 
     existing = cursor.execute(
         "SELECT id FROM perfiles WHERE nombre = 'Frontend React Senior'"
@@ -185,7 +189,7 @@ def create_aplicacion(data: dict):
         cursor.execute(
             """
             INSERT INTO job_applications
-            (perfil_id, titulo, empresa, ubicacion, descripcion, link, fuente, score, score_detalle, gemini_razon)
+            (perfil_id, titulo, empresa, ubicacion, descripcion, link, fuente, score, score_detalle, llm_razon)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
@@ -198,7 +202,7 @@ def create_aplicacion(data: dict):
                 data["fuente"],
                 data.get("score", 0),
                 json.dumps(data.get("score_detalle", {})),
-                data.get("gemini_razon", ""),
+                data.get("llm_razon", ""),
             ),
         )
         conn.commit()

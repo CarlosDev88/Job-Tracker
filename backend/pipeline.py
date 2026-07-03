@@ -4,7 +4,7 @@ import glob
 from datetime import datetime
 from backend.database import get_perfil_activo, create_aplicacion
 from backend.filtros.keywords import filtrar_vacante
-from backend.filtros.gemini import filtrar_con_gemini
+from backend.filtros.llm_filter import filtrar_con_llm
 
 RAW_DATA_PATH = os.getenv("RAW_DATA_PATH", "./raw_data")
 
@@ -16,7 +16,7 @@ def procesar_vacantes(vacantes: list, fuente: str) -> dict:
     Pipeline:
       Filtro 0: blacklist dura
       Filtro 1: scoring por pesos
-      Filtro 2: Gemini semántico (solo score >= 50)
+      Filtro 2: LLM semántico (solo score >= 50)
       → DB
     
     Retorna stats del procesamiento.
@@ -29,7 +29,7 @@ def procesar_vacantes(vacantes: list, fuente: str) -> dict:
         "total": len(vacantes),
         "blacklist": 0,
         "score_bajo": 0,
-        "gemini_rechazado": 0,
+        "llm_rechazado": 0,
         "guardadas": 0,
         "duplicadas": 0,
         "perfil": perfil["nombre"],
@@ -45,10 +45,10 @@ def procesar_vacantes(vacantes: list, fuente: str) -> dict:
             continue
 
         print(f"✅ score={resultado["score"]} | {vacante.get("titulo","")[:50]}")
-        gemini_result = filtrar_con_gemini(vacante, perfil)
+        llm_result = filtrar_con_llm(vacante, perfil)
 
-        if not gemini_result["pasa"]:
-            stats["gemini_rechazado"] += 1
+        if not llm_result["pasa"]:
+            stats["llm_rechazado"] += 1
             continue
 
         saved = create_aplicacion({
@@ -61,7 +61,7 @@ def procesar_vacantes(vacantes: list, fuente: str) -> dict:
             "fuente": fuente,
             "score": resultado["score"],
             "score_detalle": resultado["detalle"],
-            "gemini_razon": gemini_result["razon"],
+            "llm_razon": llm_result["razon"],
         })
 
         if saved:
@@ -108,7 +108,7 @@ def importar_raw_data() -> dict:
             total_stats["rechazadas"] += (
                 stats.get("blacklist", 0) +
                 stats.get("score_bajo", 0) +
-                stats.get("gemini_rechazado", 0)
+                stats.get("llm_rechazado", 0)
             )
 
         except Exception as e:
