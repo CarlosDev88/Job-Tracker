@@ -1,0 +1,8 @@
+.venv
+**/__pycache__
+*.pyc
+.git
+job_tracker.db
+raw_data/*.json
+filtradas/*.json
+frontend/node_modules
