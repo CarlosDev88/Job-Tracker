@@ -2,7 +2,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import json
 
 from backend.database import (
     init_db,
@@ -17,10 +16,8 @@ from backend.database import (
     update_notas,
     delete_aplicacion,
     get_stats,
-    get_perfil_activo,
 )
-from backend.pipeline import procesar_vacantes, importar_raw_data
-from backend.scrapers.getonbord import scrape_getonbord
+from backend.pipeline import importar_raw_data
 
 app = FastAPI(title="Job Tracker API", version="1.0.0")
 
@@ -123,23 +120,6 @@ def agregar_notas(app_id: int, data: NotasUpdate):
 @app.delete("/aplicaciones/{app_id}", status_code=204)
 def eliminar_aplicacion(app_id: int):
     delete_aplicacion(app_id)
-
-
-@app.post("/pipeline/run")
-async def run_pipeline():
-    """Ejecuta scrapers GetOnBord + pipeline de filtros con el perfil activo."""
-    perfil = get_perfil_activo()
-    if not perfil:
-        raise HTTPException(400, "No hay perfil activo")
-
-    tags = json.loads(perfil.get("getonbord_tags", "[]"))
-    vacantes = await scrape_getonbord(tags)
-
-    if not vacantes:
-        return {"mensaje": "No se encontraron vacantes en GetOnBord", "tags": tags}
-
-    stats = procesar_vacantes(vacantes, fuente="getonbord")
-    return stats
 
 
 @app.post("/pipeline/importar-raw")

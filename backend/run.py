@@ -5,7 +5,6 @@ Uso:
   python run.py --importar
 """
 
-import asyncio
 import argparse
 import sys
 import os
@@ -13,9 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.database import init_db, activar_perfil, get_perfiles
-from backend.pipeline import procesar_vacantes, importar_raw_data
-from backend.scrapers.getonbord import scrape_getonbord
-import json
+from backend.pipeline import importar_raw_data
 
 
 def main():
@@ -55,16 +52,6 @@ def main():
             return
         activar_perfil(perfil["id"])
         print(f"✅ Perfil activado: {perfil['nombre']}")
-
-        tags = json.loads(perfil.get("getonbord_tags", "[]"))
-        print(f"🔍 Scraping GetOnBord con tags: {tags}")
-        vacantes = asyncio.run(scrape_getonbord(tags))
-        print(f"📦 Vacantes encontradas: {len(vacantes)}")
-
-        stats = procesar_vacantes(vacantes, fuente="getonbord")
-        print(f"\n📊 Pipeline completado:")
-        for k, v in stats.items():
-            print(f"   {k}: {v}")
         return
 
     parser.print_help()
