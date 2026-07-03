@@ -182,6 +182,12 @@ def activar_perfil(perfil_id: int):
     return get_perfil(perfil_id)
 
 
+def _normalizar_link(link: str) -> str:
+    """Quita query string y '/' final para que la misma vacante con distintos
+    parámetros de tracking no se cuele como fila duplicada (UNIQUE en link)."""
+    return link.split("?")[0].rstrip("/")
+
+
 def create_aplicacion(data: dict):
     conn = get_connection()
     cursor = conn.cursor()
@@ -198,7 +204,7 @@ def create_aplicacion(data: dict):
                 data.get("empresa", ""),
                 data.get("ubicacion", ""),
                 data.get("descripcion", ""),
-                data["link"],
+                _normalizar_link(data["link"]),
                 data["fuente"],
                 data.get("score", 0),
                 json.dumps(data.get("score_detalle", {})),

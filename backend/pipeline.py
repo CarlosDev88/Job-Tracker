@@ -5,9 +5,23 @@ from datetime import datetime
 from backend.database import get_perfil_activo, create_aplicacion
 from backend.filtros.keywords import filtrar_vacante
 from backend.filtros.llm_filter import filtrar_con_llm
+from backend.filtros.normalizador import normalizar_vacante
 
 RAW_DATA_PATH = os.getenv("RAW_DATA_PATH", "./raw_data")
 FILTRADAS_PATH = os.getenv("FILTRADAS_PATH", "./filtradas/filtradas.json")
+
+
+def _detectar_fuente(nombre_archivo: str) -> str:
+    nombre = os.path.basename(nombre_archivo).lower()
+    if nombre.startswith("getonbrd"):
+        return "getonbrd"
+    if nombre.startswith("linkedin_feed"):
+        return "linkedin_feed"
+    if nombre.startswith("linkedin_publicaciones"):
+        return "linkedin_publicaciones"
+    if nombre.startswith("linkedin"):
+        return "linkedin_extension"
+    return "raw_data"
 
 
 def filtrar_raw_data() -> dict:
@@ -28,10 +42,16 @@ def filtrar_raw_data() -> dict:
 
     vacantes = []
     for archivo in archivos:
+        fuente = _detectar_fuente(archivo)
         try:
             with open(archivo, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            vacantes.extend(data if isinstance(data, list) else data.get("vacantes", []))
+            items = data if isinstance(data, list) else data.get("vacantes", [])
+            for item in items:
+                vacante = normalizar_vacante(item)
+                if vacante is not None:
+                    vacante["fuente"] = fuente
+                    vacantes.append(vacante)
         except Exception as e:
             print(f"Error leyendo {archivo}: {e}")
 
@@ -51,7 +71,7 @@ def filtrar_raw_data() -> dict:
             "ubicacion": vacante.get("ubicacion", ""),
             "descripcion": vacante.get("descripcion", ""),
             "link": vacante.get("link", ""),
-            "fuente": "linkedin_extension",
+            "fuente": vacante.get("fuente", ""),
             "score": resultado["score"],
             "detalle": resultado["detalle"],
         })

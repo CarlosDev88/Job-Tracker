@@ -83,9 +83,10 @@ export default function Ofertas() {
                         className="text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300"
                     >
                         <option value="">Todas las fuentes</option>
-                        <option value="linkedin_extension">LinkedIn extensión</option>
-                        <option value="linkedin_playwright">LinkedIn bot</option>
-                        <option value="getonbord">GetOnBord</option>
+                        <option value="linkedin_extension">LinkedIn búsqueda</option>
+                        <option value="linkedin_publicaciones">LinkedIn publicaciones</option>
+                        <option value="linkedin_feed">LinkedIn feed</option>
+                        <option value="getonbrd">GetOnBord</option>
                     </select>
                 </div>
             </div>
