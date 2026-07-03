@@ -47,8 +47,6 @@ Formato de respuesta EXACTO:
         model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt)
         text = response.text.strip()
-
-        # Limpiar posibles backticks
         text = text.replace("```json", "").replace("```", "").strip()
         result = json.loads(text)
 

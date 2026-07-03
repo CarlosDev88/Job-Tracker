@@ -157,7 +157,6 @@ export default function Ofertas() {
                 )}
             </div>
 
-            {/* Modal notas */}
             {selected && (
                 <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
                     <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-5 w-full max-w-md">

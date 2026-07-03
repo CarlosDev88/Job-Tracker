@@ -18,11 +18,6 @@ async def scrape_linkedin(search_string: str, max_results: int = 100) -> list[di
     """
     Placeholder — implementar en Fase 3.
     """
-    # TODO: Fase 3
-    # from playwright.async_api import async_playwright
-    # async with async_playwright() as p:
-    #     browser = await p.chromium.launch(headless=False)
-    #     ...
     print("LinkedIn Playwright scraper — pendiente Fase 3")
     return []
 

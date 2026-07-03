@@ -49,7 +49,6 @@ async def scrape_getonbord(tags: list[str]) -> list[dict]:
             except Exception as e:
                 print(f"Error GetOnBord tag '{tag}': {e}")
 
-    # Deduplicar por link
     seen = set()
     unique = []
     for v in vacantes:

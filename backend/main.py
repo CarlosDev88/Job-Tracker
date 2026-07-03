@@ -38,9 +38,6 @@ def startup():
     init_db()
 
 
-# ── Models ───────────────────────────────────────────────────
-
-
 class PerfilCreate(BaseModel):
     nombre: str
     keywords_incluir: list[str]
@@ -67,9 +64,6 @@ class NotasUpdate(BaseModel):
     notas: str
 
 
-# ── Perfiles ─────────────────────────────────────────────────
-
-
 @app.get("/perfiles")
 def listar_perfiles():
     return get_perfiles()
@@ -94,9 +88,6 @@ def activar(perfil_id: int):
     if not perfil:
         raise HTTPException(404, "Perfil no encontrado")
     return activar_perfil(perfil_id)
-
-
-# ── Job Applications ─────────────────────────────────────────
 
 
 @app.get("/aplicaciones")
@@ -134,9 +125,6 @@ def eliminar_aplicacion(app_id: int):
     delete_aplicacion(app_id)
 
 
-# ── Pipeline ─────────────────────────────────────────────────
-
-
 @app.post("/pipeline/run")
 async def run_pipeline():
     """Ejecuta scrapers GetOnBord + pipeline de filtros con el perfil activo."""
@@ -158,9 +146,6 @@ async def run_pipeline():
 def importar_raw():
     """Procesa JSONs de raw_data/ generados por la extensión Chrome."""
     return importar_raw_data()
-
-
-# ── Stats ────────────────────────────────────────────────────
 
 
 @app.get("/stats")

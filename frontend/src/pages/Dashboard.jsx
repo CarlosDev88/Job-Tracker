@@ -22,7 +22,6 @@ export default function Dashboard() {
             const res = await fetch(`${API}/pipeline/run`, { method: 'POST' })
             const data = await res.json()
             setPipelineResult(data)
-            // Refresh stats
             const s = await fetch(`${API}/stats`).then(r => r.json())
             setStats(s)
         } catch (e) {

@@ -37,7 +37,6 @@ def procesar_vacantes(vacantes: list, fuente: str) -> dict:
     }
 
     for vacante in vacantes:
-        # ── Filtro 0 + 1: keywords/scoring
         resultado = filtrar_vacante(vacante, perfil)
 
         if not resultado["pasa"]:
@@ -46,14 +45,12 @@ def procesar_vacantes(vacantes: list, fuente: str) -> dict:
             continue
 
         print(f"✅ score={resultado["score"]} | {vacante.get("titulo","")[:50]}")
-        # ── Filtro 2: Gemini (solo si score >= 50)
         gemini_result = filtrar_con_gemini(vacante, perfil)
 
         if not gemini_result["pasa"]:
             stats["gemini_rechazado"] += 1
             continue
 
-        # ── Guardar en DB
         saved = create_aplicacion({
             "perfil_id": perfil["id"],
             "titulo": vacante.get("titulo", ""),

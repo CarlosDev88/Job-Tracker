@@ -118,7 +118,6 @@ export default function Perfiles() {
                 ))}
             </div>
 
-            {/* Form */}
             {showForm && (
                 <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-5">
                     <h2 className="font-medium mb-4">{editing ? 'Editar perfil' : 'Nuevo perfil'}</h2>

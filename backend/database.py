@@ -53,7 +53,6 @@ def init_db():
         );
     """)
 
-    # Perfil inicial si no existe
     existing = cursor.execute(
         "SELECT id FROM perfiles WHERE nombre = 'Frontend React Senior'"
     ).fetchone()
@@ -95,9 +94,6 @@ def init_db():
     conn.commit()
     conn.close()
     print(f"DB inicializada en {DB_PATH}")
-
-
-# ── Perfiles ────────────────────────────────────────────────
 
 
 def get_perfiles():
@@ -180,9 +176,6 @@ def activar_perfil(perfil_id: int):
     conn.commit()
     conn.close()
     return get_perfil(perfil_id)
-
-
-# ── Job Applications ─────────────────────────────────────────
 
 
 def create_aplicacion(data: dict):

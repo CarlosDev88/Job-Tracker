@@ -6,7 +6,6 @@ import Perfiles from './pages/Perfiles'
 export default function App() {
     return (
         <div className="min-h-screen flex">
-            {/* Sidebar */}
             <nav className="w-52 bg-zinc-900 border-r border-zinc-800 p-4 flex flex-col gap-1">
                 <div className="text-sm font-semibold text-zinc-400 uppercase tracking-wider mb-4 px-2">
                     Job Tracker
@@ -32,7 +31,6 @@ export default function App() {
                 ))}
             </nav>
 
-            {/* Main */}
             <main className="flex-1 p-6 overflow-auto">
                 <Routes>
                     <Route path="/" element={<Dashboard />} />

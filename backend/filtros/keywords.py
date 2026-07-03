@@ -1,9 +1,7 @@
 import json
 import re
 
-# ── Pesos globales por tecnología ────────────────────────────
 WEIGHTS = {
-    # Positivos
     "react": 25,
     "typescript": 20,
     "next.js": 20,
@@ -29,7 +27,6 @@ WEIGHTS = {
     "frontend": 10,
     "front-end": 10,
     "front end": 10,
-    # Negativos leves
     "angular": -20,
     "vue": -15,
     "svelte": -10,
@@ -39,7 +36,6 @@ WEIGHTS = {
     "junior": -30,
     "entry level": -30,
     "intern": -50,
-    # Negativos duros — OJO: java NO matchea javascript (ver blacklist_check)
     "spring boot": -80,
     "spring framework": -80,
     ".net core": -100,
@@ -56,8 +52,6 @@ WEIGHTS = {
     "golang": -40,
 }
 
-# ── Blacklist dura: descarte inmediato ────────────────────────
-# IMPORTANTE: usar patrones que NO hagan falso positivo
 # "java" no debe matchear "javascript"
 BLACKLIST_PATTERNS = [
     r"\bjava\b(?![\s,;/]*script)",  # java pero NO javascript
@@ -115,7 +109,6 @@ def calcular_score(titulo: str, descripcion: str, perfil: dict) -> dict:
             else:
                 matches_negativos.append({"keyword": keyword, "peso": weight})
 
-    # Keywords del perfil activo (bonus extra)
     keywords_incluir = json.loads(perfil.get("keywords_incluir", "[]"))
     keywords_excluir = json.loads(perfil.get("keywords_excluir", "[]"))
 
