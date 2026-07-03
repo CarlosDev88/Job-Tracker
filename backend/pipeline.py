@@ -28,7 +28,9 @@ def filtrar_raw_data() -> dict:
     """
     Etapa 1: lee todos los JSONs en raw_data/ (generados por la extensión Chrome),
     aplica el filtro de keywords y sobrescribe filtradas.json con las que pasan,
-    rankeadas por score. No llama al LLM.
+    rankeadas por score. No llama al LLM para el filtro de keywords en sí, pero
+    normalizar_vacante() sí puede llamarlo para clasificar posts ambiguos del
+    feed de LinkedIn que no traen tarjeta de empleo estructurada.
     """
     perfil = get_perfil_activo()
     if not perfil:
