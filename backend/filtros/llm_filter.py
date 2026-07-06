@@ -46,6 +46,12 @@ Formato de respuesta EXACTO:
         }
 
     except json.JSONDecodeError:
-        return {"pasa": False, "razon": f"Error parsing respuesta LLM: {text[:100]}"}
+        return {"pasa": False, "error": True, "razon": f"Error parsing respuesta LLM: {text[:100]}"}
     except Exception as e:
-        return {"pasa": False, "razon": f"Error LLM: {str(e)}"}
+        mensaje = str(e)
+        # La capa gratuita de Gemini tiene una cuota diaria muy chica (aparte del
+        # límite por minuto que ya throttlea GeminiConnector) — sin distinguir esto,
+        # un 429 se contaba como "no encaja con el perfil" en vez de "hay que reintentar".
+        if "429" in mensaje or "quota" in mensaje.lower():
+            return {"pasa": False, "error": True, "cuota_agotada": True, "razon": "Cuota gratuita del LLM agotada por hoy"}
+        return {"pasa": False, "error": True, "razon": f"Error LLM: {mensaje}"}

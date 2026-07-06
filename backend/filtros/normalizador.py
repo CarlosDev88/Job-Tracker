@@ -1,64 +1,34 @@
-import json
-import re
-
-from backend.llm.factory import get_connector
-
-# Red ancha barata: candidatos con lenguaje de contratación, antes de gastar
-# una llamada al LLM. Baja precisión a propósito (ver spec: #OpenToWork, ads
-# de plataformas de reclutamiento y spam de hashtags también matchean esto)
-# — el LLM decide después cuáles son ofertas reales.
-PALABRAS_CONTRATACION = re.compile(
-    r"buscamos|busco|contratando|contrataci[oó]n|vacante|hiring|"
-    r"job opening|oferta laboral|estamos buscando|join our team|"
-    r"[uú]nete a nuestro equipo|postul|oportunidad laboral|open position",
-    re.IGNORECASE,
-)
+from backend.filtros.feed_filter import clasificar_post_feed
 
 
 def _clasificar_post_textual(item: dict) -> dict | None:
     """
-    Posts del feed de LinkedIn sin tarjeta_empleo estructurada, pero cuyo
-    texto usa lenguaje de contratación. El regex de arriba es una red ancha;
-    solo esos candidatos pasan por el LLM, que decide si es una oferta real
-    (y no un #OpenToWork, un anuncio de plataforma de reclutamiento, un post
-    de opinión, etc.) y extrae título/empresa/ubicación del texto libre.
+    Posts del feed de LinkedIn sin tarjeta_empleo estructurada: pasan por el
+    filtro dedicado de feed_filter.py (algoritmo_feed.md) en vez del filtro
+    genérico de keywords.py — el caption es demasiado corto para que el
+    score/gaps genérico funcione bien. La decisión (REVISAR/TAL_VEZ), el
+    score y el contacto extraído (emails/links) quedan en el dict resultante
+    para que pipeline.py los use directo, sin volver a correr filtrar_vacante.
     """
     descripcion = item.get("descripcion") or ""
-    if not PALABRAS_CONTRATACION.search(descripcion):
+    resultado = clasificar_post_feed(descripcion)
+    if resultado is None:
         return None
 
-    connector = get_connector()
-    if not connector.enabled:
-        return None
-
-    prompt = f"""Analiza este post de LinkedIn y determina si es una oferta de empleo real (alguien ofreciendo una vacante), y no otra cosa (alguien buscando trabajo, un anuncio de una plataforma de reclutamiento, contenido de opinión, spam de hashtags, etc.).
-
-POST:
-{descripcion[:1500]}
-
-Responde SOLO con JSON, sin markdown, sin explicaciones:
-{{"es_vacante": true, "titulo": "...", "empresa": "...", "ubicacion": "..."}}
-
-Si es_vacante es false, deja titulo/empresa/ubicacion como cadenas vacías.
-"""
-
-    try:
-        texto = connector.generar(prompt)
-        texto = texto.replace("```json", "").replace("```", "").strip()
-        resultado = json.loads(texto)
-    except Exception:
-        return None
-
-    if not resultado.get("es_vacante"):
-        return None
-
+    links = resultado["links"]
     return {
-        "titulo": resultado.get("titulo", ""),
-        "empresa": resultado.get("empresa", ""),
-        "ubicacion": resultado.get("ubicacion", ""),
+        "titulo": descripcion.strip().splitlines()[0][:120] if descripcion.strip() else "(revisar manualmente)",
+        "empresa": "",
+        "ubicacion": "",
         "descripcion": descripcion,
-        "link": item.get("autor_perfil", ""),
+        "link": links[0] if links else item.get("autor_perfil", ""),
         "extraido_en": item.get("extraido_en", ""),
+        "revisar_manual": True,
+        "imagenes": item.get("imagenes") or [],
+        "feed_decision": resultado["decision"],
+        "feed_score": resultado["score"],
+        "feed_emails": resultado["emails"],
+        "feed_links": links,
     }
 
 
@@ -87,6 +57,7 @@ def normalizar_vacante(item: dict, fuente: str) -> dict | None:
             "descripcion": item.get("descripcion", ""),
             "link": tarjeta.get("link", ""),
             "extraido_en": item.get("extraido_en", ""),
+            "imagenes": item.get("imagenes") or [],
         }
 
     return _clasificar_post_textual(item)

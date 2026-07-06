@@ -17,7 +17,7 @@ from backend.database import (
     delete_aplicacion,
     get_stats,
 )
-from backend.pipeline import filtrar_raw_data, analizar_con_llm
+from backend.pipeline import filtrar_raw_data, analizar_con_llm, leer_filtradas, convertir_a_oferta
 
 app = FastAPI(title="Job Tracker API", version="1.0.0")
 
@@ -59,6 +59,21 @@ class EstadoUpdate(BaseModel):
 
 class NotasUpdate(BaseModel):
     notas: str
+
+
+class AnalizarRequest(BaseModel):
+    links: Optional[list[str]] = None
+
+
+class VacanteAplicar(BaseModel):
+    titulo: str
+    empresa: Optional[str] = ""
+    ubicacion: Optional[str] = ""
+    descripcion: Optional[str] = ""
+    link: str
+    fuente: Optional[str] = ""
+    score: Optional[int] = 0
+    detalle: Optional[dict] = {}
 
 
 @app.get("/perfiles")
@@ -128,10 +143,28 @@ def filtrar():
     return filtrar_raw_data()
 
 
+@app.get("/pipeline/filtradas")
+def filtradas():
+    """Devuelve el ranking de la última corrida de --filtrar, tal cual quedó en filtradas.json."""
+    return leer_filtradas()
+
+
 @app.post("/pipeline/analizar")
-def analizar():
-    """Etapa 2: corre el filtro semántico del LLM sobre filtradas.json y guarda en la DB."""
-    return analizar_con_llm()
+def analizar(data: AnalizarRequest = AnalizarRequest()):
+    """
+    Etapa 2: corre el filtro semántico del LLM sobre filtradas.json y guarda en la DB.
+    Si `data.links` viene con valores, solo analiza esas vacantes (selección manual).
+    """
+    return analizar_con_llm(links=data.links)
+
+
+@app.post("/pipeline/aplicar")
+def aplicar(data: VacanteAplicar):
+    """Convierte una vacante prefiltrada en una oferta con estado 'aplicado', lista para trackear."""
+    resultado = convertir_a_oferta(data.model_dump())
+    if resultado.get("error"):
+        raise HTTPException(400, resultado["error"])
+    return resultado
 
 
 @app.get("/stats")
