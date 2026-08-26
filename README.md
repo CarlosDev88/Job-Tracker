@@ -13,8 +13,12 @@ Herramienta local para procesar JSON de vacantes, puntuarlas contra un perfil y 
 
 ## Requisito previo: carpeta de datos del scraper
 
-El pipeline **no descarga nada por si mismo**: lee los JSON que el scraper deja en una
-carpeta de tu equipo. Por convencion esa carpeta es `Downloads/JobTracker`
+El pipeline **no descarga nada por si mismo**: lee los JSON que deja la extensión de
+Chrome [job-scraper-extension](https://github.com/CarlosDev88/job-scraper-extension),
+que es la que hace la ingesta real (extrae las vacantes de LinkedIn y Get on Board y
+las guarda como `.json`). Este repo es el pipeline que consume esos archivos; para
+correr el flujo completo primero necesitas esa extensión instalada y corriendo sus
+extracciones. Por convencion esa carpeta compartida es `Downloads/JobTracker`
 (en Windows la carpeta se muestra como "Descargas" pero en disco se llama `Downloads`).
 
 1. Crea la carpeta si no existe:
