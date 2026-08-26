@@ -3,28 +3,33 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    ports:
-      - "8000:8000"
     env_file:
       - .env
     environment:
       RAW_DATA_PATH: /app/raw_data
       FILTRADAS_PATH: /app/filtradas/filtradas.json
       DATABASE_URL: /app/data/job_tracker.db
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
-      - ${RAW_DATA_HOST_PATH:-./raw_data}:/app/raw_data
+      - ${RAW_DATA_HOST_PATH:-./raw_data}:/app/raw_data:ro
       - ./filtradas:/app/filtradas
       - db_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
 
   frontend:
     build:
       context: ./frontend
     ports:
-      - "5173:5173"
-    environment:
-      VITE_API_TARGET: http://backend:8000
+      - "127.0.0.1:5173:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   db_data:

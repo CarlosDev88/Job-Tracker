@@ -1,69 +1,72 @@
-# Extension — LinkedIn Job Scraper
+# Job Tracker V1
 
-## Instalación en Chrome (desde WSL)
+Herramienta local para procesar JSON de vacantes, puntuarlas contra un perfil y hacer seguimiento de las oportunidades guardadas.
 
-Los archivos de la extensión viven en tu WSL pero Chrome corre en Windows.
-Tienes que copiar (o acceder) la carpeta desde Windows.
+## Qué hace
 
-### Opción A — Ruta UNC (más fácil)
-En Chrome, ve a `chrome://extensions/` → "Cargar descomprimida" → navega a:
-```
-\\wsl$\Ubuntu\home\<tu_usuario>\job-tracker\extension
-```
+- Lee JSON desde una carpeta local montada en Docker.
+- Normaliza y deduplica vacantes de LinkedIn y GetOnBord.
+- Puntúa vacantes estructuradas y clasifica posts del feed por separado.
+- Conserva la descripción completa.
+- Permite guardar una vacante o guardarla directamente como aplicada.
+- Persiste estados, fechas y notas en SQLite.
 
-### Opción B — Copiar a Windows
-```bash
-cp -r ~/job-tracker/extension /mnt/c/Users/<TuUsuario>/Desktop/job-tracker-extension
-```
-Luego en Chrome → "Cargar descomprimida" → elige esa carpeta.
+## Inicio rápido
 
----
+1. Copia el archivo de configuración:
 
-## Íconos requeridos
-Chrome requiere los íconos declarados en manifest.json.
-Genera 3 PNGs placeholder con este comando:
+~~~bash
+cp .env.example .env
+~~~
 
-```bash
-cd ~/job-tracker/extension
-# Requiere ImageMagick
-sudo apt install imagemagick -y
-convert -size 16x16 xc:'#00c9a7' icons/icon16.png
-convert -size 48x48 xc:'#00c9a7' icons/icon48.png
-convert -size 128x128 xc:'#00c9a7' icons/icon128.png
-```
+2. Ajusta RAW_DATA_HOST_PATH en .env para que apunte a la carpeta local que recibe los JSON.
 
----
+3. Enciende Docker Desktop y ejecuta:
+
+~~~bash
+docker compose up --build
+~~~
+
+4. Abre http://localhost:5173 y pulsa Procesar JSON.
+
+La API de salud queda disponible en http://localhost:8000/health.
 
 ## Flujo de uso
 
-1. Abre `linkedin.com/jobs/search` con tu string de búsqueda
-2. Deja que cargue la lista de resultados (panel izquierdo)
-3. Click en el ícono de la extensión → **Extraer ofertas**
-4. La extensión hace click en cada tarjeta con delay de 1.5s
-5. Al terminar, descarga automáticamente `raw_data/linkedin_YYYYMMDD_HHMMSS.json`
-6. Mueve ese JSON a `~/job-tracker/raw_data/`
-7. Ejecuta `./buscar.sh --importar` para procesarlo
+1. Un scraper externo deja JSON en la carpeta configurada.
+2. Dashboard procesa y muestra el ranking.
+3. Usa Guardar para seguir una vacante sin haber aplicado.
+4. Usa Guardar como aplicada si ya enviaste la aplicación.
+5. Gestiona estado y notas en Seguimiento de vacantes.
 
----
+## Formato mínimo de vacante estructurada
 
-## Estructura de cada oferta en el JSON
-
-```json
+~~~json
 {
   "titulo": "Senior Frontend Engineer",
-  "empresa": "Acme Corp",
-  "ubicacion": "Colombia (Remoto)",
-  "descripcion": "...",
-  "link": "https://www.linkedin.com/jobs/view/1234567890",
-  "extraido_en": "2026-06-22T10:30:00.000Z"
+  "empresa": "Acme",
+  "ubicacion": "Colombia remoto",
+  "descripcion": "Requisitos: React y TypeScript...",
+  "link": "https://www.linkedin.com/jobs/view/123"
 }
-```
+~~~
 
----
+Los archivos pueden ser una lista de vacantes o un objeto con la propiedad vacantes. El feed de LinkedIn admite su formato actual con tarjeta_empleo o descripción libre.
 
-## Notas
+## Datos y respaldo
 
-- **Selectores DOM**: LinkedIn cambia su estructura periódicamente.
-  Si deja de funcionar, inspecciona el elemento en DevTools y actualiza los selectores en `content.js`.
-- **Límite recomendado**: máximo 100 tarjetas por sesión.
-- **Permisos requeridos**: `activeTab`, `scripting`, `storage`, `downloads`.
+SQLite vive en el volumen Docker db_data. Antes de cambios importantes, crea un respaldo:
+
+~~~bash
+docker compose cp backend:/app/data/job_tracker.db ./backup-job-tracker.db
+~~~
+
+No versionar .env, raw_data ni filtradas.json.
+
+## Verificación
+
+Cuando Docker esté encendido:
+
+~~~bash
+./verificar.sh
+~~~

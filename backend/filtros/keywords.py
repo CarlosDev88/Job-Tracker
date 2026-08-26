@@ -1,274 +1,267 @@
 import json
 import re
-import unicodedata
 
-# Hard blacklist: stacks tan incompatibles con un perfil React/Next.js que
-# mencionarlos en cualquier parte (incluso en la sección deseable) descarta —
-# a diferencia de VETO_DURO_PATTERNS de abajo, que solo veta si aparece en la
-# sección de requisitos duros.
-BLACKLIST_PATTERNS = [
-    r"\bspring boot\b",
-    r"\bspring framework\b",
-    r"\basp\.net\b",
-    r"\bc#\b",
-    r"\bwordpress\b",
-    r"\bdrupal\b",
-    r"\bjoomla\b",
-    r"\bodoo\b",
-    r"\bcobol\b",
-    r"\bsalesforce\b(?!.*react)",  # salesforce OK si también menciona react
-]
+from backend.filtros.texto import contiene, normalizar_texto
+
+BLACKLIST_PATTERNS = {
+    "spring": r"\bspring (boot|framework)\b",
+    "asp.net": r"(?<!\w)asp\.net(?!\w)",
+    "c#": r"(?<!\w)c#(?!\w)",
+    "wordpress": r"\bwordpress\b",
+    "drupal": r"\bdrupal\b",
+    "joomla": r"\bjoomla\b",
+    "odoo": r"\bodoo\b",
+    "cobol": r"\bcobol\b",
+}
 
 DURO_HEADERS = [
-    r"\bindispensable\b", r"\bexcluyente\b", r"\bmust have\b", r"\bfundamental\b",
-    r"\bs[oó]lido\b", r"\bdominio\b", r"\bexperiencia s[oó]lida\b",
-    r"\brequisitos\b", r"\brequerimientos\b", r"\bobligatorio\b",
-    r"\brequirements?\b", r"\bwhat you bring\b", r"\bqu[eé] debes tener\b",
+    r"\bindispensable\b", r"\bexcluyente\b", r"\bmust have\b",
+    r"\bfundamental\b", r"\bs[oó]lido\b", r"\bdominio\b",
+    r"\bexperiencia s[oó]lida\b", r"\brequisitos\b",
+    r"\brequerimientos\b", r"\bobligatorio\b", r"\brequirements?\b",
+    r"\bwhat you bring\b", r"\bqu[eé] debes tener\b",
 ]
 BLANDO_HEADERS = [
-    r"\bdeseable\b", r"\bnice to have\b", r"\bplus\b", r"\bvalorar[aá]\b",
-    r"\bfamiliaridad\b", r"\bconocimiento b[aá]sico\b", r"\bopcional(es)?\b", r"\bbonus\b",
-    r"\bbeneficios\b", r"\bcondiciones\b", r"\bbenefits\b",
+    r"\bdeseable\b", r"\bnice to have\b", r"\bplus\b",
+    r"\bvalorar[aá]\b", r"\bfamiliaridad\b", r"\bconocimiento b[aá]sico\b",
+    r"\bopcional(es)?\b", r"\bbonus\b", r"\bbeneficios\b",
+    r"\bcondiciones\b", r"\bbenefits\b",
 ]
 
-# Stack incompatible, pero contextual: solo descarta si aparece en la sección
-# de requisitos duros (ver _mapa_zonas/_zona_en). En la sección deseable queda
-# como "gap blando" informativo, no descarta.
-VETO_DURO_PATTERNS = {
-    "nestjs": r"\bnest\.?js\b",
-    "kubernetes": r"\bkubernetes\b|\bk8s\b",
+VETOS = {
+    "nestjs": r"(?<!\w)nest\.?js(?!\w)",
+    "kubernetes": r"\b(kubernetes|k8s)\b",
     "kafka": r"\bkafka\b",
     "rabbitmq": r"\brabbitmq\b",
     "terraform": r"\bterraform\b",
     "php": r"\bphp\b(?!\s*:\s*\d)",
     "laravel": r"\blaravel\b",
-    ".net": r"\bdotnet\b|\b\.net\b",
+    ".net": r"(?<!\w)(dotnet|\.net)(?!\w)",
     "java backend": r"\bjava\b(?![\s,;/]*script)",
     "python backend": r"\bpython\b",
     "react native": r"\breact native\b",
-    "angular": r"\bangular\b",  # excepción: no veta si también piden react
+    "angular": r"\bangular\b",
     "supabase": r"\bsupabase\b",
     "prisma": r"\bprisma\b",
-    "shopify/liquid": r"\bshopify\b|\bliquid\b",
-    "dynamodb/sqs/sns/eventbridge": r"\bdynamodb\b|\bsqs\b|\bsns\b|\beventbridge\b",
+    "shopify/liquid": r"\b(shopify|liquid)\b",
+    "dynamodb/sqs/sns/eventbridge": r"\b(dynamodb|sqs|sns|eventbridge)\b",
 }
 
-VETO_IDIOMA = re.compile(
-    r"ingl[eé]s\s+(avanzado|fluido|advanced|fluent|excelente|excellent)|\bc1\b",
-    re.IGNORECASE,
-)
-
-# Perfil: Senior Frontend React/Next.js/TS/VTEX, base en Bucaramanga.
-CORE = ["react", "next.js", "nextjs", "typescript", "frontend", "front-end", "front end", "vtex"]
-SECUNDARIO = ["node", "node.js", "nodejs", "graphql", "aws", "jest", "redux", "tailwind", "seo", "core web vitals", "cwv"]
-BONUS_PERFIL = ["e-commerce", "ecommerce", "retail", "performance", "lighthouse", "i18n"]
+CORE_GRUPOS = {
+    "react": ["react", "react.js", "reactjs"],
+    "next": ["next.js", "nextjs"],
+    "typescript": ["typescript"],
+    "frontend": ["frontend", "front-end", "front end"],
+    "vtex": ["vtex"],
+}
+SECUNDARIO_GRUPOS = {
+    "node": ["node", "node.js", "nodejs"],
+    "graphql": ["graphql"],
+    "aws": ["aws"],
+    "jest": ["jest"],
+    "redux": ["redux"],
+    "tailwind": ["tailwind"],
+    "seo": ["seo"],
+    "core web vitals": ["core web vitals", "cwv"],
+}
+BONUS_GRUPOS = {
+    "e-commerce": ["e-commerce", "ecommerce"],
+    "retail": ["retail"],
+    "performance": ["performance"],
+    "lighthouse": ["lighthouse"],
+    "i18n": ["i18n"],
+}
 
 UMBRAL_APLICAR_YA = 55
 UMBRAL_APLICAR = 35
 UMBRAL_REVISAR_MANUAL = 20
 
 
-def normalize(text: str) -> str:
-    """NFKD + sin tildes + minúsculas — crítico para Unicode estilizado (𝐒𝐨𝐟𝐭𝐰𝐚𝐫𝐞→software)."""
-    if not text:
-        return ""
-    t = unicodedata.normalize("NFKD", text)
-    t = "".join(c for c in t if not unicodedata.combining(c))
-    return t.lower().strip()
-
-
-def blacklist_check(titulo: str, descripcion: str) -> bool:
-    """Retorna True si debe ser descartada inmediatamente, sin importar la sección."""
-    text = normalize(f"{titulo} {descripcion}")
-    for pattern in BLACKLIST_PATTERNS:
-        if re.search(pattern, text):
-            return True
-    return False
-
-
-def _mapa_zonas(text: str) -> list:
-    """Ubica los headers DURO/BLANDO en el texto, en orden de aparición."""
+def _zonas(descripcion: str) -> list[tuple[int, int, str]]:
     marcadores = []
-    for pat in DURO_HEADERS:
-        for m in re.finditer(pat, text):
-            marcadores.append((m.start(), "DURO"))
-    for pat in BLANDO_HEADERS:
-        for m in re.finditer(pat, text):
-            marcadores.append((m.start(), "BLANDO"))
-    marcadores.sort(key=lambda x: x[0])
-    return marcadores
+    for patron in DURO_HEADERS:
+        marcadores.extend((match.start(), "DURO") for match in re.finditer(patron, descripcion))
+    for patron in BLANDO_HEADERS:
+        marcadores.extend((match.start(), "BLANDO") for match in re.finditer(patron, descripcion))
+    marcadores.sort()
+
+    zonas, inicio, tipo = [], 0, "DURO"
+    for posicion, nuevo_tipo in marcadores:
+        if posicion > inicio:
+            zonas.append((inicio, posicion, tipo))
+        inicio, tipo = posicion, nuevo_tipo
+    zonas.append((inicio, len(descripcion), tipo))
+    return zonas
 
 
-def _zona_en(pos: int, marcadores: list) -> str:
-    """Zona vigente en esa posición: el último header visto antes de pos, o DURO por defecto."""
-    zona = "DURO"
-    for marker_pos, marker_zona in marcadores:
-        if marker_pos <= pos:
-            zona = marker_zona
-        else:
-            break
-    return zona
+def _tipo_zona(posicion: int, zonas: list[tuple[int, int, str]]) -> str:
+    for inicio, fin, tipo in zonas:
+        if inicio <= posicion < fin:
+            return tipo
+    return "DURO"
 
 
-def _veto_stack(texto: str, marcadores: list) -> tuple:
-    """Evalúa VETO_DURO_PATTERNS: retorna (vetos_duros, vetos_blandos) según la zona donde aparecen."""
-    duros, blandos = [], []
-    for kw, pattern in VETO_DURO_PATTERNS.items():
-        matches = list(re.finditer(pattern, texto))
-        if not matches:
-            continue
-        if kw == "angular" and re.search(r"\breact\b", texto):
-            continue  # react + angular no veta: react gana
-        zona = _zona_en(matches[0].start(), marcadores)
-        (duros if zona == "DURO" else blandos).append(kw)
-    return duros, blandos
+def _clasificar_patron(titulo: str, descripcion: str, patron: str) -> str:
+    if re.search(patron, titulo):
+        return "DURO"
+    zonas = _zonas(descripcion)
+    apariciones = list(re.finditer(patron, descripcion))
+    if not apariciones:
+        return "AUSENTE"
+    tipos = {_tipo_zona(match.start(), zonas) for match in apariciones}
+    return "DURO" if "DURO" in tipos else "BLANDO"
 
 
-def _veto_idioma(texto: str) -> bool:
-    return bool(VETO_IDIOMA.search(texto))
+def _conceptos_presentes(texto: str, grupos: dict[str, list[str]]) -> set[str]:
+    return {
+        concepto
+        for concepto, aliases in grupos.items()
+        if any(contiene(texto, alias) for alias in aliases)
+    }
 
 
-def _veto_ubicacion(ubicacion: str, texto: str) -> bool:
-    """Presencial/híbrido fuera de Bucaramanga (y sin mención de remoto) descarta."""
-    contexto = normalize(f"{ubicacion} {texto}")
-    es_presencial_hibrido = bool(re.search(r"h[ií]brido|presencial|on-?site", contexto))
-    if not es_presencial_hibrido:
-        return False
-    menciona_bucaramanga = "bucaramanga" in contexto
-    menciona_remoto = bool(re.search(r"\bremot[oa]\b|\bremote\b", contexto))
-    return not (menciona_bucaramanga or menciona_remoto)
+def _lista_json(perfil: dict, campo: str) -> list[str]:
+    try:
+        value = perfil.get(campo, "[]")
+        return value if isinstance(value, list) else json.loads(value or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+
+
+def _ingles_avanzado(texto: str) -> bool:
+    return bool(re.search(
+        r"(ingl[eé]s|english)\s+(avanzado|fluido|advanced|fluent|excelente|excellent)"
+        r"|\b(c1|c2)\b.{0,30}\b(ingl[eé]s|english)\b"
+        r"|\b(ingl[eé]s|english)\b.{0,30}\b(c1|c2)\b",
+        texto,
+    ))
+
+
+def _veto_ubicacion(ubicacion: str, texto: str, ubicacion_base: str) -> bool:
+    contexto = f"{normalizar_texto(ubicacion)} {texto}"
+    presencial = bool(re.search(r"h[ií]brido|presencial|on-?site", contexto))
+    remoto = bool(re.search(r"\bremot[oa]\b|\bremote\b", contexto))
+    return presencial and not remoto and normalizar_texto(ubicacion_base) not in contexto
+
+
+def _detalle_base() -> dict:
+    return {
+        "positivos": [],
+        "negativos": [],
+        "gaps_duros": [],
+        "gaps_blandos": [],
+        "riesgo_ingles": "BAJO",
+    }
+
+
+def _ya_puntuado_por_core(keyword: str, puntuados: set[str]) -> bool:
+    return any(
+        keyword in {normalizar_texto(alias) for alias in CORE_GRUPOS[concepto]}
+        for concepto in puntuados
+    )
 
 
 def calcular_score(titulo: str, descripcion: str, perfil: dict) -> dict:
-    """
-    Score 0-100. El título pesa doble (+15/keyword CORE, tope 30) porque un
-    puesto que dice "React" en el título es una señal más fuerte que uno que
-    lo menciona de pasada en el cuerpo (+8, y solo si cae en la sección de
-    requisitos duros). Secundarios y bonus de perfil no dependen de sección.
-    """
-    titulo_n = normalize(titulo)
-    desc_n = normalize(descripcion)
-    texto = f"{titulo_n} {desc_n}"
-    marcadores = _mapa_zonas(desc_n)
-
+    titulo_n = normalizar_texto(titulo)
+    descripcion_n = normalizar_texto(descripcion)
+    texto = f"{titulo_n} {descripcion_n}"
+    detalle = _detalle_base()
     score = 0
-    positivos = []
-    negativos = []
+    core_titulo = _conceptos_presentes(titulo_n, CORE_GRUPOS)
+    score += min(30, 15 * len(core_titulo))
+    for concepto in sorted(core_titulo):
+        detalle["positivos"].append({"keyword": concepto, "peso": 15, "zona": "titulo"})
 
-    title_bonus = 0
-    for kw in CORE:
-        if re.search(rf"\b{re.escape(kw)}\b", titulo_n):
-            positivos.append({"keyword": kw, "peso": 15, "zona": "titulo"})
-            title_bonus += 15
-    score += min(title_bonus, 30)
+    zonas = _zonas(descripcion_n)
+    puntuados = set(core_titulo)
+    for concepto, aliases in CORE_GRUPOS.items():
+        if concepto in puntuados:
+            continue
+        if any(
+            _clasificar_patron("", descripcion_n, r"(?<!\w)" + re.escape(alias) + r"(?!\w)") == "DURO"
+            for alias in aliases
+        ):
+            score += 8
+            puntuados.add(concepto)
+            detalle["positivos"].append({"keyword": concepto, "peso": 8, "zona": "dura"})
 
-    for kw in CORE:
-        for m in re.finditer(rf"\b{re.escape(kw)}\b", desc_n):
-            if _zona_en(m.start(), marcadores) == "DURO":
-                positivos.append({"keyword": kw, "peso": 8, "zona": "dura"})
-                score += 8
-                break
+    for grupos, peso, zona in ((SECUNDARIO_GRUPOS, 3, "secundario"), (BONUS_GRUPOS, 5, "bonus")):
+        for concepto in sorted(_conceptos_presentes(texto, grupos)):
+            score += peso
+            detalle["positivos"].append({"keyword": concepto, "peso": peso, "zona": zona})
 
-    for kw in SECUNDARIO:
-        if re.search(rf"\b{re.escape(kw)}\b", texto):
-            positivos.append({"keyword": kw, "peso": 3, "zona": "secundario"})
-            score += 3
-
-    for kw in BONUS_PERFIL:
-        if re.search(rf"\b{re.escape(kw)}\b", texto):
-            positivos.append({"keyword": kw, "peso": 5, "zona": "bonus"})
+    for keyword in _lista_json(perfil, "keywords_incluir"):
+        keyword_n = normalizar_texto(keyword)
+        if keyword_n and not _ya_puntuado_por_core(keyword_n, puntuados) and contiene(texto, keyword_n):
             score += 5
+            detalle["positivos"].append({"keyword": keyword_n, "peso": 5, "zona": "perfil"})
 
-    # Perfil dinámico (tabla perfiles): keywords propias del usuario, encima del stack hardcodeado
-    keywords_incluir = json.loads(perfil.get("keywords_incluir", "[]"))
-    keywords_excluir = json.loads(perfil.get("keywords_excluir", "[]"))
-
-    for kw in keywords_incluir:
-        kw_n = normalize(kw)
-        if kw_n and re.search(rf"\b{re.escape(kw_n)}\b", texto):
-            positivos.append({"keyword": kw_n, "peso": 5, "fuente": "perfil"})
-            score += 5
-
-    for kw in keywords_excluir:
-        kw_n = normalize(kw)
-        if kw_n and re.search(rf"\b{re.escape(kw_n)}\b", texto):
-            negativos.append({"keyword": kw_n, "peso": -30, "fuente": "perfil"})
+    for keyword in _lista_json(perfil, "keywords_excluir"):
+        keyword_n = normalizar_texto(keyword)
+        patron = r"(?<!\w)" + re.escape(keyword_n) + r"(?!\w)"
+        if keyword_n and _clasificar_patron(titulo_n, descripcion_n, patron) == "DURO":
             score -= 30
+            detalle["negativos"].append({"keyword": keyword_n, "peso": -30, "zona": "perfil"})
 
-    anios = [int(n) for n in re.findall(r"\b(\d{1,2})\+?\s*a[ñn]os?\b", texto)]
+    anios = [int(numero) for numero in re.findall(r"\b(\d{1,2})\+?\s*a[ñn]os?\b", texto)]
     if anios:
-        anio_max = max(anios)
-        if 3 <= anio_max <= 4:
-            positivos.append({"keyword": f"{anio_max}+ años (cumples)", "peso": 5})
+        mayor = max(anios)
+        if 3 <= mayor <= 4:
             score += 5
-        elif anio_max >= 6:
-            negativos.append({"keyword": f"{anio_max}+ años (riesgo, tienes 5)", "peso": -10})
+            detalle["positivos"].append({"keyword": f"{mayor}+ años", "peso": 5})
+        elif mayor >= 6:
             score -= 10
+            detalle["negativos"].append({"keyword": f"{mayor}+ años", "peso": -10})
 
-    # Si el texto llegó hasta acá es porque ya pasó el veto de inglés avanzado/fluido/C1
-    positivos.append({"keyword": "inglés no avanzado", "peso": 5})
     score += 5
-
+    detalle["positivos"].append({"keyword": "inglés no avanzado", "peso": 5})
     if re.search(r"\bremot[oa]\b|\bremote\b", texto) and re.search(r"\blatam\b|\bcolombia\b", texto):
-        positivos.append({"keyword": "remoto latam/colombia", "peso": 5})
         score += 5
+        detalle["positivos"].append({"keyword": "remoto latam/colombia", "peso": 5})
 
-    return {
-        "score": max(0, min(100, score)),
-        "score_raw": score,
-        "positivos": positivos,
-        "negativos": negativos,
-    }
+    detalle["score_raw"] = score
+    detalle["score"] = max(0, min(100, score))
+    return detalle
 
 
 def filtrar_vacante(vacante: dict, perfil: dict) -> dict:
     titulo = vacante.get("titulo", "")
     descripcion = vacante.get("descripcion", "")
     ubicacion = vacante.get("ubicacion", "")
+    texto = normalizar_texto(f"{titulo} {descripcion}")
 
-    if blacklist_check(titulo, descripcion):
-        return {
-            "pasa": False,
-            "razon": "blacklist",
-            "score": 0,
-            "detalle": {"decision": "NO_APLICAR", "razon_descarte": "stack incompatible"},
-        }
+    for nombre, patron in BLACKLIST_PATTERNS.items():
+        if re.search(patron, texto):
+            return {"pasa": False, "razon": "blacklist", "score": 0, "detalle": {"decision": "NO_APLICAR", "razon_descarte": nombre}}
 
-    texto = normalize(f"{titulo} {descripcion}")
-    marcadores = _mapa_zonas(normalize(descripcion))
+    if _ingles_avanzado(texto):
+        return {"pasa": False, "razon": "ingles_estricto", "score": 0, "detalle": {"decision": "NO_APLICAR", "razon_descarte": "inglés avanzado exigido"}}
 
-    if _veto_idioma(texto):
-        return {
-            "pasa": False,
-            "razon": "ingles_estricto",
-            "score": 0,
-            "detalle": {"decision": "NO_APLICAR", "razon_descarte": "inglés avanzado/fluido/C1 exigido"},
-        }
+    if _veto_ubicacion(ubicacion, texto, perfil.get("ubicacion_base", "Bucaramanga")):
+        return {"pasa": False, "razon": "ubicacion_incompatible", "score": 0, "detalle": {"decision": "NO_APLICAR", "razon_descarte": "presencial/híbrido fuera de Bucaramanga"}}
 
-    if _veto_ubicacion(ubicacion, texto):
-        return {
-            "pasa": False,
-            "razon": "ubicacion_incompatible",
-            "score": 0,
-            "detalle": {"decision": "NO_APLICAR", "razon_descarte": "presencial/híbrido fuera de Bucaramanga"},
-        }
+    titulo_n, descripcion_n = normalizar_texto(titulo), normalizar_texto(descripcion)
+    duros, blandos = [], []
+    for nombre, patron in VETOS.items():
+        if nombre == "angular" and contiene(texto, "react"):
+            continue
+        tipo = _clasificar_patron(titulo_n, descripcion_n, patron)
+        if tipo == "DURO":
+            duros.append(nombre)
+        elif tipo == "BLANDO":
+            blandos.append(nombre)
 
-    vetos_duros, vetos_blandos = _veto_stack(texto, marcadores)
-    if vetos_duros:
+    if duros:
         return {
             "pasa": False,
             "razon": "veto_stack",
             "score": 0,
-            "detalle": {
-                "decision": "NO_APLICAR",
-                "razon_descarte": f"stack incompatible en requisitos duros: {', '.join(vetos_duros)}",
-                "gaps_duros": [{"keyword": k} for k in vetos_duros],
-            },
+            "detalle": {"decision": "NO_APLICAR", "gaps_duros": [{"keyword": item} for item in duros]},
         }
 
-    resultado = calcular_score(titulo, descripcion, perfil)
-    score = resultado["score"]
-
+    detalle = calcular_score(titulo, descripcion, perfil)
+    detalle["gaps_blandos"] = [{"keyword": item} for item in blandos]
+    score = detalle["score"]
     if score >= UMBRAL_APLICAR_YA:
         decision = "APLICAR_YA"
     elif score >= UMBRAL_APLICAR:
@@ -276,22 +269,8 @@ def filtrar_vacante(vacante: dict, perfil: dict) -> dict:
     elif score >= UMBRAL_REVISAR_MANUAL:
         decision = "REVISAR_MANUAL"
     else:
-        return {
-            "pasa": False,
-            "razon": "score_bajo",
-            "score": score,
-            "detalle": {**resultado, "decision": "NO_APLICAR"},
-        }
+        detalle["decision"] = "NO_APLICAR"
+        return {"pasa": False, "razon": "score_bajo", "score": score, "detalle": detalle}
 
-    return {
-        "pasa": True,
-        "razon": "ok",
-        "score": score,
-        "detalle": {
-            **resultado,
-            "gaps_duros": [],
-            "gaps_blandos": [{"keyword": k} for k in vetos_blandos],
-            "riesgo_ingles": "BAJO",
-            "decision": decision,
-        },
-    }
+    detalle["decision"] = decision
+    return {"pasa": True, "razon": "ok", "score": score, "detalle": detalle}

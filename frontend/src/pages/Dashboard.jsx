@@ -4,377 +4,124 @@ import DecisionBadge from '../components/DecisionBadge'
 
 const API = '/api'
 const POR_PAGINA = 10
+const ETIQUETAS_ESTADO = {
+    pendiente: 'Guardada', aplicado: 'Aplicada', cv_enviado: 'CV enviado',
+    hr_contacto: 'Contacto RR. HH.', prueba_tecnica: 'Prueba técnica',
+    entrevista_rrhh: 'Entrevista RR. HH.', entrevista_tecnica: 'Entrevista técnica',
+    oferta: 'Oferta recibida', rechazado: 'Rechazada', ghosted: 'Sin respuesta',
+}
 
-export default function Dashboard() {
-    const [stats, setStats] = useState(null)
-    const [loading, setLoading] = useState(true)
-    const [filtrando, setFiltrando] = useState(false)
-    const [filtroResult, setFiltroResult] = useState(null)
-    const [ranking, setRanking] = useState([])
+export default function Dashboard({ onNavigate }) {
+    const [documento, setDocumento] = useState({ vacantes: [], feed: [], stats: {}, errores: [] })
+    const [cargando, setCargando] = useState(true)
+    const [procesando, setProcesando] = useState(false)
+    const [error, setError] = useState('')
     const [detalle, setDetalle] = useState(null)
+    const [guardando, setGuardando] = useState(false)
     const [pagina, setPagina] = useState(0)
-    const [aplicando, setAplicando] = useState(false)
-    const [aplicarResultado, setAplicarResultado] = useState(null)
-    const [copiado, setCopiado] = useState(false)
 
-    const cargarStats = () => {
-        fetch(`${API}/stats`)
-            .then(r => r.json())
-            .then(data => { setStats(data); setLoading(false) })
-            .catch(() => setLoading(false))
-    }
-
-    const cargarFiltradas = () => {
-        fetch(`${API}/pipeline/filtradas`)
-            .then(r => r.json())
-            .then(data => setRanking(Array.isArray(data) ? data : []))
-            .catch(() => {})
-    }
-
-    // El ranking se recarga desde el backend (filtradas.json), no solo desde la
-    // respuesta del último click — así sobrevive a navegar a Ofertas/Perfiles y volver.
-    useEffect(() => { cargarStats(); cargarFiltradas() }, [])
-
-    const filtrar = async () => {
-        setFiltrando(true)
-        setFiltroResult(null)
+    const cargar = async () => {
         try {
-            const res = await fetch(`${API}/pipeline/filtrar`, { method: 'POST' })
-            const data = await res.json()
-            setFiltroResult(data)
-            setRanking(data.ranking || [])
-            setPagina(0)
-        } catch (e) {
-            setFiltroResult({ error: e.message })
+            const respuesta = await fetch(API + '/pipeline/filtradas')
+            if (!respuesta.ok) throw new Error('No fue posible cargar el ranking')
+            setDocumento(await respuesta.json())
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setCargando(false)
         }
-        setFiltrando(false)
     }
 
-    const convertirEnOferta = async (vacante) => {
-        setAplicando(true)
-        setAplicarResultado(null)
+    useEffect(() => { cargar() }, [])
+
+    const procesar = async () => {
+        setProcesando(true)
+        setError('')
         try {
-            const res = await fetch(`${API}/pipeline/aplicar`, {
+            const respuesta = await fetch(API + '/pipeline/filtrar', { method: 'POST' })
+            const data = await respuesta.json()
+            if (!respuesta.ok) throw new Error(data.detail || 'No fue posible procesar los JSON')
+            setPagina(0)
+            await cargar()
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setProcesando(false)
+        }
+    }
+
+    const guardar = async (vacante, estadoInicial) => {
+        setGuardando(true)
+        setError('')
+        try {
+            const respuesta = await fetch(API + '/aplicaciones', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(vacante),
+                body: JSON.stringify({
+                    dedupe_key: vacante.dedupe_key,
+                    titulo: vacante.titulo, empresa: vacante.empresa, ubicacion: vacante.ubicacion,
+                    descripcion: vacante.descripcion, link: vacante.link, fuente: vacante.fuente,
+                    score: vacante.score, score_detalle: vacante.detalle, estado_inicial: estadoInicial,
+                }),
             })
-            const data = await res.json()
-            if (!res.ok) throw new Error(data.detail || 'Error al convertir en oferta')
-            setAplicarResultado({ ok: true })
-            cargarStats()
-        } catch (e) {
-            setAplicarResultado({ ok: false, error: e.message })
+            const data = await respuesta.json()
+            if (!respuesta.ok) throw new Error(data.detail || 'No fue posible guardar la vacante')
+            await cargar()
+            setDetalle(current => current ? { ...current, tracking: data } : null)
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setGuardando(false)
         }
-        setAplicando(false)
     }
 
-    const copiarEmpleo = (vacante) => {
-        const texto = `${vacante.titulo}${vacante.empresa ? ' · ' + vacante.empresa : ''}\n\n${vacante.descripcion}`
-        navigator.clipboard.writeText(texto)
-        setCopiado(true)
-        setTimeout(() => setCopiado(false), 2000)
-    }
-
-    const abrirDetalle = (v) => {
-        setDetalle(v)
-        setAplicarResultado(null)
-        setCopiado(false)
-    }
-
-    const totalPaginas = Math.max(1, Math.ceil(ranking.length / POR_PAGINA))
+    const vacantes = documento.vacantes || []
+    const feed = documento.feed || []
+    const totalPaginas = Math.max(1, Math.ceil(vacantes.length / POR_PAGINA))
     const paginaSegura = Math.min(pagina, totalPaginas - 1)
-    const paginaItems = ranking.slice(paginaSegura * POR_PAGINA, paginaSegura * POR_PAGINA + POR_PAGINA)
+    const paginaItems = vacantes.slice(paginaSegura * POR_PAGINA, (paginaSegura + 1) * POR_PAGINA)
 
     return (
         <div className="max-w-6xl mx-auto">
-            <div className="flex items-center justify-between mb-6">
-                <h1 className="text-xl font-semibold">Dashboard</h1>
-                <div className="flex gap-2">
-                    <button
-                        onClick={filtrar}
-                        disabled={filtrando}
-                        className="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 rounded transition-colors disabled:opacity-50"
-                    >
-                        {filtrando ? 'Filtrando...' : '🔍 1. Filtrar vacantes'}
-                    </button>
-                </div>
+            <div className="flex items-center justify-between gap-4 mb-6">
+                <div><h1 className="text-xl font-semibold">Dashboard</h1><p className="text-sm text-zinc-500">Procesa JSON y guarda solo las oportunidades que quieras seguir.</p></div>
+                <button onClick={procesar} disabled={procesando} className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 rounded disabled:opacity-50">{procesando ? 'Procesando...' : 'Procesar JSON'}</button>
             </div>
-
-            {loading && <p className="text-zinc-400">Cargando...</p>}
-
-            {stats && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-                    <StatCard label="Total" value={stats.total} />
-                    {stats.por_estado?.map(s => (
-                        <StatCard key={s.estado} label={s.estado} value={s.count} />
-                    ))}
-                </div>
-            )}
-
-            {stats?.por_fuente?.length > 0 && (
-                <div className="bg-zinc-900 border border-zinc-800 rounded p-4 mb-4">
-                    <h2 className="text-sm font-medium text-zinc-400 mb-3">Por fuente</h2>
-                    <div className="flex gap-4">
-                        {stats.por_fuente.map(f => (
-                            <div key={f.fuente} className="text-sm">
-                                <span className="text-zinc-400">{f.fuente}: </span>
-                                <span className="font-medium">{f.count}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {filtroResult?.error && (
-                <div className="bg-red-950 border border-red-900 text-red-300 text-sm rounded p-3 mb-4">
-                    {filtroResult.error}
-                </div>
-            )}
-
-            {ranking.length > 0 && (
-                <div className="mb-4">
-                    <h2 className="text-sm font-medium text-zinc-400 mb-3">
-                        Ranking filtrado ({ranking.length})
-                    </h2>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {paginaItems.map((v, i) => (
-                            <div
-                                key={i}
-                                onClick={() => abrirDetalle(v)}
-                                className="bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded p-4 cursor-pointer transition-colors"
-                            >
-                                <div className="flex items-center gap-2 mb-2">
-                                    {v.revisar_manual
-                                        ? <DecisionBadge decision={v.detalle?.decision} />
-                                        : <ScoreBadge score={v.score} />}
-                                    {!v.revisar_manual && v.detalle?.decision && (
-                                        <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded">
-                                            {v.detalle.decision}
-                                        </span>
-                                    )}
-                                    <span className="text-xs text-zinc-500 ml-auto truncate">{v.fuente}</span>
-                                </div>
-
-                                {v.imagenes?.length > 0 && (
-                                    <div className="flex gap-2 mb-2 overflow-x-auto">
-                                        {v.imagenes.map((url, j) => (
-                                            <img
-                                                key={j}
-                                                src={url}
-                                                alt=""
-                                                className="h-28 w-28 object-cover rounded shrink-0 bg-zinc-800"
-                                            />
-                                        ))}
-                                    </div>
-                                )}
-
-                                <div className="flex items-baseline gap-2 mb-1">
-                                    <span className="font-medium text-base truncate">{v.titulo}</span>
-                                    {v.empresa && <span className="text-zinc-500 text-base shrink-0">· {v.empresa}</span>}
-                                </div>
-
-                                <p className="text-sm text-zinc-300 line-clamp-3 whitespace-pre-wrap">
-                                    {v.descripcion}
-                                </p>
-                            </div>
-                        ))}
-                    </div>
-
-                    {totalPaginas > 1 && (
-                        <div className="flex items-center justify-center gap-3 mt-4">
-                            <button
-                                onClick={() => setPagina(p => Math.max(0, p - 1))}
-                                disabled={paginaSegura === 0}
-                                className="text-sm px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded disabled:opacity-40"
-                            >
-                                ← Anterior
-                            </button>
-                            <span className="text-sm text-zinc-400">
-                                Página {paginaSegura + 1} de {totalPaginas}
-                            </span>
-                            <button
-                                onClick={() => setPagina(p => Math.min(totalPaginas - 1, p + 1))}
-                                disabled={paginaSegura >= totalPaginas - 1}
-                                className="text-sm px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded disabled:opacity-40"
-                            >
-                                Siguiente →
-                            </button>
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {detalle && (
-                <div
-                    className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6"
-                    onClick={() => setDetalle(null)}
-                >
-                    <div
-                        className="bg-zinc-900 border border-zinc-700 rounded-lg p-8 w-full max-w-4xl max-h-[85vh] overflow-auto"
-                        onClick={e => e.stopPropagation()}
-                    >
-                        <div className="flex items-start justify-between gap-4 mb-1">
-                            <h3 className="text-xl font-semibold">{detalle.titulo}</h3>
-                            {detalle.revisar_manual
-                                ? <DecisionBadge decision={detalle.detalle?.decision} />
-                                : <ScoreBadge score={detalle.score} />}
-                        </div>
-                        <p className="text-base text-zinc-400 mb-4">
-                            {detalle.empresa} {detalle.ubicacion && `· ${detalle.ubicacion}`}
-                            {!detalle.revisar_manual && detalle.detalle?.decision && ` · ${detalle.detalle.decision}`}
-                        </p>
-
-                        {detalle.revisar_manual && (
-                            <div className="bg-zinc-800 border border-zinc-700 text-zinc-300 text-sm rounded p-3 mb-4">
-                                🔎 Esto vino de un post del feed de LinkedIn sin tarjeta de empleo estructurada — no
-                                se extrajo título/empresa automáticamente. Lee la descripción completa y decide si es
-                                una vacante real.
-                                {(detalle.detalle?.emails?.length > 0 || detalle.detalle?.links?.length > 0) && (
-                                    <div className="mt-2 space-y-1">
-                                        {detalle.detalle.emails?.map((e, i) => (
-                                            <div key={i}>📧 <a href={`mailto:${e}`} className="text-blue-400 hover:underline">{e}</a></div>
-                                        ))}
-                                        {detalle.detalle.links?.map((l, i) => (
-                                            <div key={i}>🔗 <a href={l} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">{l}</a></div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        <StackBreakdown detalle={detalle.detalle} />
-
-                        {detalle.imagenes?.length > 0 && (
-                            <div className="flex gap-3 mb-5 flex-wrap">
-                                {detalle.imagenes.map((url, j) => (
-                                    <img
-                                        key={j}
-                                        src={url}
-                                        alt=""
-                                        className="max-h-96 rounded border border-zinc-800"
-                                    />
-                                ))}
-                            </div>
-                        )}
-
-                        <p className="text-zinc-300 whitespace-pre-wrap mb-6" style={{ fontSize: '16px', lineHeight: 1.6 }}>
-                            {detalle.descripcion}
-                        </p>
-                        {aplicarResultado?.error && (
-                            <div className="bg-red-950 border border-red-900 text-red-300 text-sm rounded p-3 mb-3">
-                                {aplicarResultado.error}
-                            </div>
-                        )}
-                        {aplicarResultado?.ok && (
-                            <div className="bg-green-950 border border-green-900 text-green-300 text-sm rounded p-3 mb-3">
-                                ✅ Convertida en oferta con estado "aplicado" — ya la puedes trackear en Ofertas.
-                            </div>
-                        )}
-
-                        <div className="flex flex-wrap justify-end gap-2">
-                            <button
-                                onClick={() => setDetalle(null)}
-                                className="text-sm px-3 py-1.5 text-zinc-400 hover:text-white"
-                            >
-                                Cerrar
-                            </button>
-                            <button
-                                onClick={() => copiarEmpleo(detalle)}
-                                className="text-sm px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded font-medium"
-                            >
-                                {copiado ? '✅ Copiado' : '📋 Copiar empleo'}
-                            </button>
-                            <button
-                                title="Próximamente: generar un CV a la medida de esta vacante"
-                                className="text-sm px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded font-medium"
-                            >
-                                🤖 Hacer CV con IA
-                            </button>
-                            <a
-                                href={detalle.link}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-sm px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded font-medium"
-                            >
-                                🔗 Ir a la vacante
-                            </a>
-                            <button
-                                onClick={() => convertirEnOferta(detalle)}
-                                disabled={aplicando || aplicarResultado?.ok}
-                                className="text-sm px-4 py-1.5 bg-green-600 hover:bg-green-500 rounded font-medium disabled:opacity-50"
-                            >
-                                {aplicando ? 'Guardando...' : aplicarResultado?.ok ? '✅ Aplicado' : '✅ Aplicar'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            {error && <Mensaje tipo="error">{error}</Mensaje>}
+            {documento.errores?.length > 0 && <Mensaje tipo="warning">Se omitieron {documento.errores.length} archivo(s) inválidos.</Mensaje>}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                <Stat label="Resultados" value={vacantes.length + feed.length} />
+                <Stat label="Vacantes" value={vacantes.length} />
+                <Stat label="Feed" value={feed.length} />
+                <Stat label="Duplicadas" value={documento.stats?.duplicadas || 0} />
+            </div>
+            {cargando && <p className="text-zinc-400">Cargando ranking...</p>}
+            {!cargando && !vacantes.length && !feed.length && <p className="text-zinc-500 text-center py-12">Aún no hay resultados. Deposita JSON y pulsa “Procesar JSON”.</p>}
+            <Seccion titulo={'Vacantes estructuradas (' + vacantes.length + ')'}>{paginaItems.map(vacante => <Tarjeta key={vacante.dedupe_key} vacante={vacante} onOpen={setDetalle} />)}</Seccion>
+            {totalPaginas > 1 && <div className="flex justify-center items-center gap-3 mt-4"><button onClick={() => setPagina(value => Math.max(0, value - 1))} disabled={paginaSegura === 0} className="px-3 py-1 bg-zinc-800 rounded disabled:opacity-40">← Anterior</button><span className="text-sm text-zinc-400">Página {paginaSegura + 1} de {totalPaginas}</span><button onClick={() => setPagina(value => Math.min(totalPaginas - 1, value + 1))} disabled={paginaSegura >= totalPaginas - 1} className="px-3 py-1 bg-zinc-800 rounded disabled:opacity-40">Siguiente →</button></div>}
+            <Seccion titulo={'Publicaciones del feed (' + feed.length + ')'}><p className="text-sm text-zinc-500 mb-3">Estas publicaciones no usan la misma escala porcentual que las vacantes estructuradas.</p>{feed.map(vacante => <Tarjeta key={vacante.dedupe_key} vacante={vacante} onOpen={setDetalle} />)}</Seccion>
+            {detalle && <Detalle vacante={detalle} guardando={guardando} onClose={() => setDetalle(null)} onGuardar={guardar} onTracking={() => onNavigate('ofertas')} />}
         </div>
     )
 }
 
-function StatCard({ label, value }) {
-    return (
-        <div className="bg-zinc-900 border border-zinc-800 rounded p-3">
-            <div className="text-xs text-zinc-400 capitalize">{label}</div>
-            <div className="text-2xl font-semibold mt-1">{value}</div>
-        </div>
-    )
+function Seccion({ titulo, children }) { return <section className="mb-8"><h2 className="text-sm font-medium text-zinc-400 mb-3">{titulo}</h2><div className="grid grid-cols-1 md:grid-cols-2 gap-4">{children}</div></section> }
+
+function Tarjeta({ vacante, onOpen }) {
+    return <button onClick={() => onOpen(vacante)} className="text-left bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded p-4 transition-colors"><div className="flex gap-2 items-center mb-2">{vacante.tipo_resultado === 'feed_post' ? <DecisionBadge decision={vacante.detalle?.decision} /> : <ScoreBadge score={vacante.score} />}<span className="text-xs text-zinc-500 ml-auto truncate">{vacante.fuente}</span></div><div className="font-medium truncate">{vacante.titulo || '(sin título)'}</div>{vacante.empresa && <div className="text-sm text-zinc-500">{vacante.empresa}</div>}{vacante.tracking && <div className="text-xs text-blue-300 mt-2">✓ {ETIQUETAS_ESTADO[vacante.tracking.estado]}</div>}<p className="text-sm text-zinc-300 line-clamp-3 whitespace-pre-wrap mt-2">{vacante.descripcion}</p></button>
 }
 
-// Agrupa por lo que ya calculó el filtro de keywords (positivos/gaps) en vez de
-// parsear la descripción libre — ese dato ya existe y no cuesta ninguna llamada al LLM.
+function Detalle({ vacante, guardando, onClose, onGuardar, onTracking }) {
+    const tracking = vacante.tracking
+    return <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6" onClick={onClose}><div className="bg-zinc-900 border border-zinc-700 rounded-lg p-6 w-full max-w-4xl max-h-[85vh] overflow-auto" onClick={event => event.stopPropagation()}><div className="flex justify-between gap-4 mb-2"><h3 className="text-xl font-semibold">{vacante.titulo || '(revisar manualmente)'}</h3>{vacante.tipo_resultado === 'feed_post' ? <DecisionBadge decision={vacante.detalle?.decision} /> : <ScoreBadge score={vacante.score} />}</div><p className="text-zinc-400 mb-4">{vacante.empresa} {vacante.ubicacion && '· ' + vacante.ubicacion}</p>{vacante.contactos?.emails?.length > 0 && <div className="mb-3 text-sm">{vacante.contactos.emails.map(email => <a key={email} href={'mailto:' + email} className="text-blue-400 block">{email}</a>)}</div>}{vacante.imagenes?.length > 0 && <div className="flex flex-wrap gap-3 mb-4">{vacante.imagenes.map(url => <img key={url} src={url} alt="" className="max-h-72 rounded border border-zinc-800" />)}</div>}<StackBreakdown detalle={vacante.detalle} /><p className="whitespace-pre-wrap text-zinc-200 leading-7 mb-6">{vacante.descripcion}</p><div className="flex flex-wrap justify-end gap-2"><button onClick={onClose} className="px-3 py-1.5 text-zinc-400">Cerrar</button><button onClick={() => navigator.clipboard.writeText(vacante.titulo + '\n\n' + vacante.descripcion)} className="px-3 py-1.5 bg-zinc-700 rounded">Copiar empleo</button>{vacante.link && <a href={vacante.link} target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 bg-zinc-700 rounded">Ir a la vacante</a>}{tracking ? <button onClick={onTracking} className="px-3 py-1.5 bg-blue-600 rounded">Ver tracking: {ETIQUETAS_ESTADO[tracking.estado]}</button> : <><button disabled={guardando} onClick={() => onGuardar(vacante, 'pendiente')} className="px-3 py-1.5 bg-zinc-700 rounded disabled:opacity-50">Guardar</button><button disabled={guardando} onClick={() => onGuardar(vacante, 'aplicado')} className="px-3 py-1.5 bg-green-600 rounded disabled:opacity-50">Guardar como aplicada</button></>}</div></div></div>
+}
+
 function StackBreakdown({ detalle }) {
-    if (!detalle) return null
-    const { positivos = [], gaps_duros = [], gaps_blandos = [], riesgo_ingles } = detalle
-
-    if (!positivos.length && !gaps_duros.length && !gaps_blandos.length && !riesgo_ingles) return null
-
-    return (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
-            {positivos.length > 0 && (
-                <div className="bg-green-950/40 border border-green-900 rounded p-3">
-                    <div className="text-xs font-medium text-green-400 mb-2">✅ Coincide con tu perfil</div>
-                    <div className="flex flex-wrap gap-1">
-                        {positivos.map((p, i) => (
-                            <span key={i} className="text-xs bg-green-900/50 text-green-300 px-2 py-0.5 rounded">
-                                {p.keyword}
-                            </span>
-                        ))}
-                    </div>
-                </div>
-            )}
-            {gaps_blandos.length > 0 && (
-                <div className="bg-yellow-950/40 border border-yellow-900 rounded p-3">
-                    <div className="text-xs font-medium text-yellow-400 mb-2">⚠️ Deseables que no cumples</div>
-                    <div className="flex flex-wrap gap-1">
-                        {gaps_blandos.map((g, i) => (
-                            <span key={i} className="text-xs bg-yellow-900/50 text-yellow-300 px-2 py-0.5 rounded">
-                                {g.keyword}
-                            </span>
-                        ))}
-                    </div>
-                </div>
-            )}
-            {(gaps_duros.length > 0 || riesgo_ingles) && (
-                <div className="bg-red-950/40 border border-red-900 rounded p-3">
-                    <div className="text-xs font-medium text-red-400 mb-2">❌ Riesgos</div>
-                    <div className="flex flex-wrap gap-1">
-                        {gaps_duros.map((g, i) => (
-                            <span key={i} className="text-xs bg-red-900/50 text-red-300 px-2 py-0.5 rounded">
-                                {g.keyword}
-                            </span>
-                        ))}
-                        {riesgo_ingles && riesgo_ingles !== 'BAJO' && (
-                            <span className="text-xs bg-red-900/50 text-red-300 px-2 py-0.5 rounded">
-                                inglés {riesgo_ingles}
-                            </span>
-                        )}
-                    </div>
-                </div>
-            )}
-        </div>
-    )
+    const positivos = detalle?.positivos || []
+    const gaps = detalle?.gaps_blandos || []
+    if (!positivos.length && !gaps.length) return null
+    return <div className="grid md:grid-cols-2 gap-3 mb-5 text-sm">{positivos.length > 0 && <div className="bg-green-950/40 border border-green-900 rounded p-3"><strong className="text-green-400">Coincidencias</strong><p className="mt-1 text-zinc-300">{positivos.map(item => item.keyword).join(', ')}</p></div>}{gaps.length > 0 && <div className="bg-yellow-950/40 border border-yellow-900 rounded p-3"><strong className="text-yellow-400">Deseables no cumplidos</strong><p className="mt-1 text-zinc-300">{gaps.map(item => item.keyword).join(', ')}</p></div>}</div>
 }
+
+function Stat({ label, value }) { return <div className="bg-zinc-900 border border-zinc-800 rounded p-3"><div className="text-xs text-zinc-400">{label}</div><div className="text-2xl font-semibold">{value}</div></div> }
+function Mensaje({ tipo, children }) { return <div className={(tipo === 'error' ? 'bg-red-950 border-red-900 text-red-200' : 'bg-yellow-950 border-yellow-900 text-yellow-200') + ' border rounded p-3 text-sm mb-4'}>{children}</div> }

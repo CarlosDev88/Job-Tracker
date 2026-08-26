@@ -1,319 +1,284 @@
-import sqlite3
 import json
 import os
+import sqlite3
 from datetime import datetime
-from typing import Optional
+from typing import Iterable
+
 from dotenv import load_dotenv
 
-load_dotenv()
+from backend.filtros.texto import canonicalizar_link, generar_dedupe_key
 
+load_dotenv()
 DB_PATH = os.getenv("DATABASE_URL", "./job_tracker.db")
 
+ESTADOS_VALIDOS = {
+    "pendiente", "aplicado", "cv_enviado", "hr_contacto", "prueba_tecnica",
+    "entrevista_rrhh", "entrevista_tecnica", "oferta", "rechazado", "ghosted",
+}
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+
+def get_connection() -> sqlite3.Connection:
+    conexion = sqlite3.connect(DB_PATH)
+    conexion.row_factory = sqlite3.Row
+    return conexion
 
 
-def init_db():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.executescript("""
+def _crear_perfiles(cursor: sqlite3.Cursor) -> None:
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS perfiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre TEXT NOT NULL,
-            keywords_incluir TEXT NOT NULL,
-            keywords_excluir TEXT NOT NULL,
-            cv_texto TEXT NOT NULL,
-            linkedin_search_string TEXT,
-            getonbord_tags TEXT,
-            activo INTEGER DEFAULT 0,
+            keywords_incluir TEXT NOT NULL DEFAULT '[]',
+            keywords_excluir TEXT NOT NULL DEFAULT '[]',
+            cv_texto TEXT NOT NULL DEFAULT '',
+            ubicacion_base TEXT NOT NULL DEFAULT 'Bucaramanga',
+            activo INTEGER NOT NULL DEFAULT 0,
             creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+        )
+    """)
+    columnas = {fila["name"] for fila in cursor.execute("PRAGMA table_info(perfiles)")}
+    if "ubicacion_base" not in columnas:
+        cursor.execute("ALTER TABLE perfiles ADD COLUMN ubicacion_base TEXT NOT NULL DEFAULT 'Bucaramanga'")
 
+
+def _crear_aplicaciones(cursor: sqlite3.Cursor) -> None:
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS job_applications (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             perfil_id INTEGER NOT NULL,
             titulo TEXT NOT NULL,
-            empresa TEXT,
-            ubicacion TEXT,
-            descripcion TEXT,
-            link TEXT UNIQUE NOT NULL,
-            fuente TEXT NOT NULL,
-            score INTEGER DEFAULT 0,
-            score_detalle TEXT,
-            llm_razon TEXT,
-            estado TEXT DEFAULT 'pendiente',
-            fecha_encontrada TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            empresa TEXT NOT NULL DEFAULT '',
+            ubicacion TEXT NOT NULL DEFAULT '',
+            descripcion TEXT NOT NULL DEFAULT '',
+            link TEXT NOT NULL DEFAULT '',
+            dedupe_key TEXT NOT NULL UNIQUE,
+            fuente TEXT NOT NULL DEFAULT '',
+            score INTEGER NOT NULL DEFAULT 0,
+            score_detalle TEXT NOT NULL DEFAULT '{}',
+            estado TEXT NOT NULL DEFAULT 'pendiente',
+            fecha_encontrada TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             fecha_aplicacion TIMESTAMP,
-            notas TEXT,
+            notas TEXT NOT NULL DEFAULT '',
             FOREIGN KEY (perfil_id) REFERENCES perfiles(id)
-        );
+        )
     """)
 
-    columnas = [row["name"] for row in cursor.execute("PRAGMA table_info(job_applications)")]
-    if "gemini_razon" in columnas and "llm_razon" not in columnas:
-        cursor.execute("ALTER TABLE job_applications RENAME COLUMN gemini_razon TO llm_razon")
 
-    existing = cursor.execute(
-        "SELECT id FROM perfiles WHERE nombre = 'Frontend React Senior'"
+def _migrar_aplicaciones(cursor: sqlite3.Cursor) -> None:
+    existe = cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='job_applications'"
     ).fetchone()
-    if not existing:
-        cursor.execute(
-            """
-            INSERT INTO perfiles (nombre, keywords_incluir, keywords_excluir, cv_texto, linkedin_search_string, getonbord_tags, activo)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                "Frontend React Senior",
-                json.dumps(
-                    ["react", "typescript", "next.js", "frontend", "jsx", "tailwind"]
-                ),
-                json.dumps(
-                    [
-                        "angular",
-                        "vue",
-                        "java",
-                        "c#",
-                        ".net",
-                        "backend",
-                        "fullstack",
-                        "full stack",
-                        "entry level",
-                        "junior",
-                        "spring",
-                        "odoo",
-                        "django",
-                    ]
-                ),
-                "Senior Frontend Engineer con 5 años de experiencia en React, TypeScript, Next.js. Proyectos en e-commerce (VTEX, Carrefour, Cencosud) y fintech. Experiencia con Tailwind, Zustand, Module Federation, Storybook.",
-                '"Frontend" "React" Colombia remoto -"Full Stack" -"Fullstack" -"Backend"',
-                json.dumps(["react-js", "typescript"]),
-                1,
-            ),
-        )
+    if not existe:
+        _crear_aplicaciones(cursor)
+        return
 
-    conn.commit()
-    conn.close()
-    print(f"DB inicializada en {DB_PATH}")
+    columnas = {fila["name"] for fila in cursor.execute("PRAGMA table_info(job_applications)")}
+    if "dedupe_key" in columnas:
+        return
+
+    filas = [dict(fila) for fila in cursor.execute("SELECT * FROM job_applications")]
+    cursor.execute("ALTER TABLE job_applications RENAME TO job_applications_legacy")
+    _crear_aplicaciones(cursor)
+
+    usados = set()
+    for fila in filas:
+        key = generar_dedupe_key(fila)
+        while key in usados:
+            key = f"{key}:{fila['id']}"
+        usados.add(key)
+        cursor.execute("""
+            INSERT INTO job_applications (
+                perfil_id, titulo, empresa, ubicacion, descripcion, link, dedupe_key,
+                fuente, score, score_detalle, estado, fecha_encontrada,
+                fecha_aplicacion, notas
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            fila["perfil_id"], fila.get("titulo", ""), fila.get("empresa", ""),
+            fila.get("ubicacion", ""), fila.get("descripcion", ""),
+            canonicalizar_link(fila.get("link", "")), key,
+            fila.get("fuente", ""), fila.get("score", 0),
+            fila.get("score_detalle", "{}"), fila.get("estado", "pendiente"),
+            fila.get("fecha_encontrada") or datetime.now().isoformat(),
+            fila.get("fecha_aplicacion"), fila.get("notas", ""),
+        ))
+    cursor.execute("DROP TABLE job_applications_legacy")
 
 
-def get_perfiles():
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM perfiles ORDER BY activo DESC, creado_en DESC"
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+def init_db() -> None:
+    conexion = get_connection()
+    cursor = conexion.cursor()
+    _crear_perfiles(cursor)
+    _migrar_aplicaciones(cursor)
+
+    existe = cursor.execute("SELECT id FROM perfiles WHERE activo = 1 LIMIT 1").fetchone()
+    if not existe:
+        cursor.execute("""
+            INSERT INTO perfiles (nombre, keywords_incluir, keywords_excluir, cv_texto, ubicacion_base, activo)
+            VALUES (?, ?, ?, ?, ?, 1)
+        """, (
+            "Frontend React Senior",
+            json.dumps(["react", "typescript", "next.js", "frontend", "tailwind"]),
+            json.dumps(["angular", "java", ".net", "backend", "fullstack", "junior"]),
+            "Perfil de frontend React con experiencia en TypeScript, Next.js y e-commerce.",
+            "Bucaramanga",
+        ))
+    conexion.commit()
+    conexion.close()
 
 
-def get_perfil(perfil_id: int):
-    conn = get_connection()
-    row = conn.execute("SELECT * FROM perfiles WHERE id = ?", (perfil_id,)).fetchone()
-    conn.close()
-    return dict(row) if row else None
+def _dict(fila: sqlite3.Row | None) -> dict | None:
+    return dict(fila) if fila else None
 
 
-def get_perfil_activo():
-    conn = get_connection()
-    row = conn.execute("SELECT * FROM perfiles WHERE activo = 1 LIMIT 1").fetchone()
-    conn.close()
-    return dict(row) if row else None
+def get_perfil_activo() -> dict | None:
+    conexion = get_connection()
+    fila = conexion.execute("SELECT * FROM perfiles WHERE activo = 1 LIMIT 1").fetchone()
+    conexion.close()
+    return _dict(fila)
 
 
-def create_perfil(data: dict):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO perfiles (nombre, keywords_incluir, keywords_excluir, cv_texto, linkedin_search_string, getonbord_tags, activo)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """,
-        (
-            data["nombre"],
-            json.dumps(data.get("keywords_incluir", [])),
-            json.dumps(data.get("keywords_excluir", [])),
-            data["cv_texto"],
-            data.get("linkedin_search_string", ""),
-            json.dumps(data.get("getonbord_tags", [])),
-            0,
-        ),
-    )
-    conn.commit()
-    perfil_id = cursor.lastrowid
-    conn.close()
-    return get_perfil(perfil_id)
+def update_perfil_activo(data: dict) -> dict | None:
+    permitido = {"nombre", "keywords_incluir", "keywords_excluir", "cv_texto", "ubicacion_base"}
+    campos, valores = [], []
+    for clave in permitido:
+        if clave in data:
+            valor = data[clave]
+            campos.append(f"{clave} = ?")
+            valores.append(json.dumps(valor) if isinstance(valor, list) else valor)
+    if not campos:
+        return get_perfil_activo()
+
+    perfil = get_perfil_activo()
+    if not perfil:
+        return None
+    valores.append(perfil["id"])
+    conexion = get_connection()
+    conexion.execute(f"UPDATE perfiles SET {', '.join(campos)} WHERE id = ?", valores)
+    conexion.commit()
+    conexion.close()
+    return get_perfil_activo()
 
 
-def update_perfil(perfil_id: int, data: dict):
-    conn = get_connection()
-    fields = []
-    values = []
-    for key in [
-        "nombre",
-        "keywords_incluir",
-        "keywords_excluir",
-        "cv_texto",
-        "linkedin_search_string",
-        "getonbord_tags",
-    ]:
-        if key in data:
-            fields.append(f"{key} = ?")
-            val = data[key]
-            values.append(json.dumps(val) if isinstance(val, list) else val)
-    if not fields:
-        conn.close()
-        return get_perfil(perfil_id)
-    values.append(perfil_id)
-    conn.execute(f"UPDATE perfiles SET {', '.join(fields)} WHERE id = ?", values)
-    conn.commit()
-    conn.close()
-    return get_perfil(perfil_id)
+def create_aplicacion(data: dict) -> dict | None:
+    perfil = get_perfil_activo()
+    if not perfil:
+        raise ValueError("No hay perfil activo")
 
+    estado = data.get("estado_inicial", "pendiente")
+    if estado not in {"pendiente", "aplicado"}:
+        raise ValueError("El estado inicial debe ser pendiente o aplicado")
 
-def activar_perfil(perfil_id: int):
-    conn = get_connection()
-    conn.execute("UPDATE perfiles SET activo = 0")
-    conn.execute("UPDATE perfiles SET activo = 1 WHERE id = ?", (perfil_id,))
-    conn.commit()
-    conn.close()
-    return get_perfil(perfil_id)
-
-
-def _normalizar_link(link: str) -> str:
-    """Quita query string y '/' final para que la misma vacante con distintos
-    parámetros de tracking no se cuele como fila duplicada (UNIQUE en link)."""
-    return link.split("?")[0].rstrip("/")
-
-
-def create_aplicacion(data: dict):
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """
-            INSERT INTO job_applications
-            (perfil_id, titulo, empresa, ubicacion, descripcion, link, fuente, score, score_detalle, llm_razon)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                data["perfil_id"],
-                data["titulo"],
-                data.get("empresa", ""),
-                data.get("ubicacion", ""),
-                data.get("descripcion", ""),
-                _normalizar_link(data["link"]),
-                data["fuente"],
-                data.get("score", 0),
-                json.dumps(data.get("score_detalle", {})),
-                data.get("llm_razon", ""),
-            ),
-        )
-        conn.commit()
-        app_id = cursor.lastrowid
-        conn.close()
-        return get_aplicacion(app_id)
-    except sqlite3.IntegrityError:
-        conn.close()
-        return None  # Duplicado por link UNIQUE
-
-
-def get_aplicacion(app_id: int):
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT * FROM job_applications WHERE id = ?", (app_id,)
+    dedupe_key = data.get("dedupe_key") or generar_dedupe_key(data)
+    conexion = get_connection()
+    existe = conexion.execute(
+        "SELECT id FROM job_applications WHERE dedupe_key = ?", (dedupe_key,)
     ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    if existe:
+        conexion.close()
+        return None
+
+    fecha_aplicacion = datetime.now().isoformat() if estado == "aplicado" else None
+    cursor = conexion.execute("""
+        INSERT INTO job_applications (
+            perfil_id, titulo, empresa, ubicacion, descripcion, link, dedupe_key,
+            fuente, score, score_detalle, estado, fecha_aplicacion
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        perfil["id"], data.get("titulo", ""), data.get("empresa", ""),
+        data.get("ubicacion", ""), data.get("descripcion", ""),
+        canonicalizar_link(data.get("link")), dedupe_key,
+        data.get("fuente", ""), data.get("score", 0),
+        json.dumps(data.get("score_detalle", {}), ensure_ascii=False),
+        estado, fecha_aplicacion,
+    ))
+    aplicacion_id = cursor.lastrowid
+    conexion.commit()
+    conexion.close()
+    return get_aplicacion(aplicacion_id)
 
 
-def get_aplicaciones(
-    estado: Optional[str] = None,
-    perfil_id: Optional[int] = None,
-    fuente: Optional[str] = None,
-):
-    conn = get_connection()
-    query = "SELECT * FROM job_applications WHERE 1=1"
-    params = []
+def get_aplicacion(aplicacion_id: int) -> dict | None:
+    conexion = get_connection()
+    fila = conexion.execute("SELECT * FROM job_applications WHERE id = ?", (aplicacion_id,)).fetchone()
+    conexion.close()
+    return _dict(fila)
+
+
+def get_aplicaciones(estado: str | None = None, fuente: str | None = None) -> list[dict]:
+    consulta, parametros = "SELECT * FROM job_applications WHERE 1=1", []
     if estado:
-        query += " AND estado = ?"
-        params.append(estado)
-    if perfil_id:
-        query += " AND perfil_id = ?"
-        params.append(perfil_id)
+        consulta += " AND estado = ?"
+        parametros.append(estado)
     if fuente:
-        query += " AND fuente = ?"
-        params.append(fuente)
-    query += " ORDER BY score DESC, fecha_encontrada DESC"
-    rows = conn.execute(query, params).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+        consulta += " AND fuente = ?"
+        parametros.append(fuente)
+    consulta += " ORDER BY fecha_encontrada DESC, score DESC"
+    conexion = get_connection()
+    filas = conexion.execute(consulta, parametros).fetchall()
+    conexion.close()
+    return [dict(fila) for fila in filas]
 
 
-def update_estado(app_id: int, estado: str):
-    estados_validos = [
-        "pendiente",
-        "aplicado",
-        "cv_enviado",
-        "hr_contacto",
-        "prueba_tecnica",
-        "entrevista_rrhh",
-        "entrevista_tecnica",
-        "oferta",
-        "rechazado",
-        "ghosted",
-    ]
-    if estado not in estados_validos:
-        raise ValueError(f"Estado inválido: {estado}")
-    conn = get_connection()
-    conn.execute(
-        "UPDATE job_applications SET estado = ? WHERE id = ?", (estado, app_id)
-    )
-    if estado in ["aplicado", "cv_enviado"]:
-        conn.execute(
-            "UPDATE job_applications SET fecha_aplicacion = ? WHERE id = ?",
-            (datetime.now().isoformat(), app_id),
+def get_tracking_por_claves(claves: Iterable[str]) -> dict[str, dict]:
+    claves = list(dict.fromkeys(clave for clave in claves if clave))
+    if not claves:
+        return {}
+    marcadores = ",".join("?" for _ in claves)
+    conexion = get_connection()
+    filas = conexion.execute(
+        f"SELECT id, dedupe_key, estado, fecha_aplicacion FROM job_applications WHERE dedupe_key IN ({marcadores})",
+        claves,
+    ).fetchall()
+    conexion.close()
+    return {fila["dedupe_key"]: dict(fila) for fila in filas}
+
+
+def update_estado(aplicacion_id: int, estado: str) -> dict | None:
+    if estado not in ESTADOS_VALIDOS:
+        raise ValueError("Estado inválido")
+    aplicacion = get_aplicacion(aplicacion_id)
+    if not aplicacion:
+        return None
+
+    conexion = get_connection()
+    if estado in {"aplicado", "cv_enviado"} and not aplicacion.get("fecha_aplicacion"):
+        conexion.execute(
+            "UPDATE job_applications SET estado = ?, fecha_aplicacion = ? WHERE id = ?",
+            (estado, datetime.now().isoformat(), aplicacion_id),
         )
-    conn.commit()
-    conn.close()
-    return get_aplicacion(app_id)
+    else:
+        conexion.execute("UPDATE job_applications SET estado = ? WHERE id = ?", (estado, aplicacion_id))
+    conexion.commit()
+    conexion.close()
+    return get_aplicacion(aplicacion_id)
 
 
-def update_notas(app_id: int, notas: str):
-    conn = get_connection()
-    conn.execute("UPDATE job_applications SET notas = ? WHERE id = ?", (notas, app_id))
-    conn.commit()
-    conn.close()
-    return get_aplicacion(app_id)
+def update_notas(aplicacion_id: int, notas: str) -> dict | None:
+    if not get_aplicacion(aplicacion_id):
+        return None
+    conexion = get_connection()
+    conexion.execute("UPDATE job_applications SET notas = ? WHERE id = ?", (notas, aplicacion_id))
+    conexion.commit()
+    conexion.close()
+    return get_aplicacion(aplicacion_id)
 
 
-def delete_aplicacion(app_id: int):
-    conn = get_connection()
-    conn.execute("DELETE FROM job_applications WHERE id = ?", (app_id,))
-    conn.commit()
-    conn.close()
+def delete_aplicacion(aplicacion_id: int) -> bool:
+    conexion = get_connection()
+    cursor = conexion.execute("DELETE FROM job_applications WHERE id = ?", (aplicacion_id,))
+    conexion.commit()
+    conexion.close()
+    return cursor.rowcount > 0
 
 
-def get_stats():
-    conn = get_connection()
-    total = conn.execute("SELECT COUNT(*) as c FROM job_applications").fetchone()["c"]
-    por_estado = conn.execute("""
-        SELECT estado, COUNT(*) as count FROM job_applications GROUP BY estado
-    """).fetchall()
-    por_fuente = conn.execute("""
-        SELECT fuente, COUNT(*) as count FROM job_applications GROUP BY fuente
-    """).fetchall()
-    por_dia = conn.execute("""
-        SELECT DATE(fecha_encontrada) as dia, COUNT(*) as count
-        FROM job_applications
-        GROUP BY dia ORDER BY dia DESC LIMIT 30
-    """).fetchall()
-    conn.close()
-    return {
-        "total": total,
-        "por_estado": [dict(r) for r in por_estado],
-        "por_fuente": [dict(r) for r in por_fuente],
-        "por_dia": [dict(r) for r in por_dia],
-    }
+def get_stats() -> dict:
+    conexion = get_connection()
+    total = conexion.execute("SELECT COUNT(*) AS count FROM job_applications").fetchone()["count"]
+    por_estado = [dict(fila) for fila in conexion.execute(
+        "SELECT estado, COUNT(*) AS count FROM job_applications GROUP BY estado ORDER BY estado"
+    )]
+    por_fuente = [dict(fila) for fila in conexion.execute(
+        "SELECT fuente, COUNT(*) AS count FROM job_applications GROUP BY fuente ORDER BY fuente"
+    )]
+    conexion.close()
+    return {"total": total, "por_estado": por_estado, "por_fuente": por_fuente}
