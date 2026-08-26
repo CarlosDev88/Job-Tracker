@@ -41,6 +41,7 @@ class PerfilUpdate(BaseModel):
     keywords_excluir: list[str] | None = None
     cv_texto: str | None = None
     ubicacion_base: str | None = None
+    empresas_bloqueadas: list[str] | None = None
 
 
 class AplicacionCreate(BaseModel):

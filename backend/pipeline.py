@@ -4,7 +4,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from glob import glob
 
-from backend.database import get_perfil_activo, get_tracking_por_claves, guardar_resultados
+from backend.database import get_perfil_activo, get_tracking_por_claves, guardar_resultados, purgar_empresas_bloqueadas
 from backend.filtros.intencion import detectar_intencion
 from backend.filtros.keywords import filtrar_vacante
 from backend.filtros.normalizador import normalizar_vacante
@@ -15,6 +15,7 @@ from backend.filtros.texto import (
     normalizar_titulo_dedupe,
     sanear_estructura,
 )
+from backend.filtros.texto import esta_bloqueada
 
 UMBRAL_SIMILITUD_REPOST = 0.85
 
@@ -135,12 +136,17 @@ def filtrar_raw_data() -> dict:
     if not perfil:
         return {"error": "No hay perfil activo."}
 
+    try:
+        empresas_bloqueadas = json.loads(perfil.get("empresas_bloqueadas") or "[]")
+    except (TypeError, ValueError):
+        empresas_bloqueadas = []
+
     archivos = sorted(glob(os.path.join(RAW_DATA_PATH, "*.json")))
     if not archivos:
         return {"error": f"No hay archivos JSON en {RAW_DATA_PATH}."}
 
     candidatos, errores = {}, []
-    stats = {"archivos": len(archivos), "archivos_validos": 0, "items": 0, "descartadas": 0, "duplicadas": 0}
+    stats = {"archivos": len(archivos), "archivos_validos": 0, "items": 0, "descartadas": 0, "duplicadas": 0, "bloqueadas": 0}
 
     for archivo in archivos:
         try:
@@ -163,6 +169,14 @@ def filtrar_raw_data() -> dict:
                 continue
 
             vacante = sanear_estructura(vacante)
+
+            # Lista negra de empresas: se descarta antes de puntuar, no llega
+            # ni al JSON ni a la base.
+            if esta_bloqueada(vacante, empresas_bloqueadas):
+                stats["bloqueadas"] += 1
+                stats["descartadas"] += 1
+                continue
+
             vacante["fuente"] = fuente
             vacante["link"] = canonicalizar_link(vacante.get("link"))
             vacante["dedupe_key"] = generar_dedupe_key(vacante)
@@ -219,6 +233,10 @@ def filtrar_raw_data() -> dict:
     # Histórico: además del archivo filtradas.json (snapshot de la corrida
     # actual), cada resultado se guarda/actualiza en SQLite por dedupe_key
     # para acumular histórico entre corridas sin duplicar filas.
+    # Purga del histórico: si agregaste una empresa a la lista negra después de
+    # haberla guardado, esta corrida también borra lo viejo.
+    stats["purgadas_historico"] = purgar_empresas_bloqueadas(empresas_bloqueadas)
+
     guardar_resultados(resultados_fusionados)
 
     grupos = _ordenar(resultados_fusionados)

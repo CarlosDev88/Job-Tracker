@@ -30,6 +30,26 @@ def normalizar_texto(texto: str | None) -> str:
     return re.sub(r"\s+", " ", texto).strip().lower()
 
 
+def normalizar_identidad(texto: str | None) -> str:
+    """Normaliza un nombre de empresa a su forma más comparable: sin tildes,
+    minúsculas y sin espacios ni puntuación. Así 'Baires Dev', 'BairesDev LLC'
+    y 'BAIRESDEV S.A.' colapsan todas a algo que contiene 'bairesdev'."""
+    return re.sub(r"[^a-z0-9]", "", normalizar_texto(texto))
+
+
+def esta_bloqueada(vacante: dict, empresas_bloqueadas) -> bool:
+    """True si la vacante pertenece a una empresa vetada. Compara contra
+    empresa y título (donde suelen aparecer los avisos de reclutadores)."""
+    if not empresas_bloqueadas:
+        return False
+    campos = normalizar_identidad(vacante.get("empresa")) + "|" + normalizar_identidad(vacante.get("titulo"))
+    for empresa in empresas_bloqueadas:
+        clave = normalizar_identidad(empresa)
+        if clave and clave in campos:
+            return True
+    return False
+
+
 def contiene(texto: str, termino: str) -> bool:
     return bool(re.search(r"(?<!\w)" + re.escape(termino) + r"(?!\w)", texto))
 

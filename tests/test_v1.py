@@ -5,7 +5,7 @@ from pathlib import Path
 
 from backend import database, pipeline
 from backend.filtros.keywords import filtrar_vacante
-from backend.filtros.texto import canonicalizar_link, generar_dedupe_key, normalizar_texto
+from backend.filtros.texto import canonicalizar_link, esta_bloqueada, generar_dedupe_key, normalizar_texto
 
 
 PERFIL = {
@@ -138,6 +138,88 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(documento["vacantes"]), 1)
         self.assertEqual(len(documento["feed"]), 1)
         self.assertEqual(resultado["stats"]["duplicadas"], 1)
+
+
+class ListaNegraTests(unittest.TestCase):
+    def test_match_ignora_espacios_mayusculas_y_sufijos(self):
+        for variante in ["BairesDev", "Baires Dev", "BAIRESDEV S.A.", "BairesDev LLC", "  bairesdev  "]:
+            with self.subTest(variante=variante):
+                self.assertTrue(esta_bloqueada({"empresa": variante, "titulo": ""}, ["bairesdev"]))
+
+    def test_no_bloquea_empresas_ajenas(self):
+        self.assertFalse(esta_bloqueada({"empresa": "Acme", "titulo": "Frontend React"}, ["bairesdev"]))
+
+    def test_detecta_empresa_en_el_titulo(self):
+        vacante = {"empresa": "", "titulo": "BairesDev busca Frontend Developer"}
+        self.assertTrue(esta_bloqueada(vacante, ["bairesdev"]))
+
+    def test_lista_vacia_no_bloquea_nada(self):
+        self.assertFalse(esta_bloqueada({"empresa": "BairesDev", "titulo": ""}, []))
+        self.assertFalse(esta_bloqueada({"empresa": "BairesDev", "titulo": ""}, None))
+
+    def test_campos_nulos_no_truenan(self):
+        self.assertFalse(esta_bloqueada({"empresa": None, "titulo": None}, ["bairesdev"]))
+
+
+class ListaNegraPipelineTests(unittest.TestCase):
+    def setUp(self):
+        self.temporal = tempfile.TemporaryDirectory()
+        raiz = Path(self.temporal.name)
+        self.raw = raiz / "raw"
+        self.raw.mkdir()
+        self.salida = raiz / "filtradas.json"
+        self.db = raiz / "tracker.db"
+        self.original = (database.DB_PATH, pipeline.RAW_DATA_PATH, pipeline.FILTRADAS_PATH)
+        database.DB_PATH = str(self.db)
+        pipeline.RAW_DATA_PATH = str(self.raw)
+        pipeline.FILTRADAS_PATH = str(self.salida)
+        database.init_db()
+
+        buena = {
+            "titulo": "Frontend React",
+            "empresa": "Acme",
+            "ubicacion": "Remoto Colombia",
+            "descripcion": "Requisitos: React, TypeScript, Tailwind y 4 anios.",
+            "link": "https://example.com/jobs/1",
+        }
+        vetada = {
+            "titulo": "React Developer - Remote Work | REF#1",
+            "empresa": "Baires Dev",
+            "ubicacion": "Remoto Colombia",
+            "descripcion": "Requisitos: React, TypeScript, Tailwind y 4 anios.",
+            "link": "https://example.com/jobs/2",
+        }
+        (self.raw / "linkedin_a.json").write_text(json.dumps([buena, vetada]), encoding="utf-8")
+
+    def tearDown(self):
+        database.DB_PATH, pipeline.RAW_DATA_PATH, pipeline.FILTRADAS_PATH = self.original
+        self.temporal.cleanup()
+
+    def _empresas_guardadas(self):
+        return {item["empresa"] for item in database.get_resultados(por_pagina=100)["items"]}
+
+    def test_bloquea_al_procesar_y_purga_lo_ya_guardado(self):
+        # 1) Sin lista negra, la vacante de la empresa entra normalmente.
+        primera = pipeline.filtrar_raw_data()
+        self.assertTrue(primera["ok"])
+        self.assertEqual(primera["stats"]["bloqueadas"], 0)
+        self.assertIn("Baires Dev", self._empresas_guardadas())
+
+        # 2) Al bloquearla, la corrida siguiente la descarta y borra la que ya
+        #    estaba guardada en el historico.
+        database.update_perfil_activo({"empresas_bloqueadas": ["bairesdev"]})
+        segunda = pipeline.filtrar_raw_data()
+
+        self.assertEqual(segunda["stats"]["bloqueadas"], 1)
+        self.assertEqual(segunda["stats"]["purgadas_historico"], 1)
+
+        empresas = self._empresas_guardadas()
+        self.assertNotIn("Baires Dev", empresas)
+        self.assertIn("Acme", empresas)
+
+        # 3) Tampoco debe aparecer en filtradas.json.
+        documento = pipeline.leer_filtradas()
+        self.assertNotIn("Baires Dev", [item["empresa"] for item in documento["vacantes"]])
 
 
 if __name__ == "__main__":

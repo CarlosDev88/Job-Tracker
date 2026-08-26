@@ -6,7 +6,7 @@ from typing import Iterable
 
 from dotenv import load_dotenv
 
-from backend.filtros.texto import canonicalizar_link, generar_dedupe_key
+from backend.filtros.texto import canonicalizar_link, generar_dedupe_key, normalizar_identidad
 
 load_dotenv()
 DB_PATH = os.getenv("DATABASE_URL", "./job_tracker.db")
@@ -36,6 +36,7 @@ def _crear_perfiles(cursor: sqlite3.Cursor) -> None:
             keywords_excluir TEXT NOT NULL DEFAULT '[]',
             cv_texto TEXT NOT NULL DEFAULT '',
             ubicacion_base TEXT NOT NULL DEFAULT 'Bucaramanga',
+            empresas_bloqueadas TEXT NOT NULL DEFAULT '[]',
             activo INTEGER NOT NULL DEFAULT 0,
             creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -43,6 +44,8 @@ def _crear_perfiles(cursor: sqlite3.Cursor) -> None:
     columnas = {fila["name"] for fila in cursor.execute("PRAGMA table_info(perfiles)")}
     if "ubicacion_base" not in columnas:
         cursor.execute("ALTER TABLE perfiles ADD COLUMN ubicacion_base TEXT NOT NULL DEFAULT 'Bucaramanga'")
+    if "empresas_bloqueadas" not in columnas:
+        cursor.execute("ALTER TABLE perfiles ADD COLUMN empresas_bloqueadas TEXT NOT NULL DEFAULT '[]'")
 
 
 def _crear_aplicaciones(cursor: sqlite3.Cursor) -> None:
@@ -165,7 +168,7 @@ def get_perfil_activo() -> dict | None:
 
 
 def update_perfil_activo(data: dict) -> dict | None:
-    permitido = {"nombre", "keywords_incluir", "keywords_excluir", "cv_texto", "ubicacion_base"}
+    permitido = {"nombre", "keywords_incluir", "keywords_excluir", "cv_texto", "ubicacion_base", "empresas_bloqueadas"}
     campos, valores = [], []
     for clave in permitido:
         if clave in data:
@@ -441,6 +444,31 @@ def get_resultados(
         item["tracking"] = tracking.get(item["dedupe_key"])
 
     return {"items": items, "total": total, "pagina": pagina, "por_pagina": por_pagina}
+
+
+def purgar_empresas_bloqueadas(empresas_bloqueadas) -> int:
+    """Borra del histórico las vacantes de empresas vetadas. Se llama en cada
+    corrida del pipeline, así que agregar una empresa a la lista y procesar
+    limpia también lo que ya estaba guardado de antes."""
+    claves = [normalizar_identidad(empresa) for empresa in (empresas_bloqueadas or [])]
+    claves = [clave for clave in claves if clave]
+    if not claves:
+        return 0
+
+    conexion = get_connection()
+    filas = conexion.execute("SELECT id, empresa, titulo FROM resultados").fetchall()
+    ids = []
+    for fila in filas:
+        campos = normalizar_identidad(fila["empresa"]) + "|" + normalizar_identidad(fila["titulo"])
+        if any(clave in campos for clave in claves):
+            ids.append(fila["id"])
+
+    if ids:
+        marcadores = ",".join("?" for _ in ids)
+        conexion.execute(f"DELETE FROM resultados WHERE id IN ({marcadores})", ids)
+        conexion.commit()
+    conexion.close()
+    return len(ids)
 
 
 def get_conteo_resultados() -> dict:

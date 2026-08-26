@@ -6,7 +6,12 @@ icons/
 *.log
 
 raw_data/*.json
-filtradas/*.json
+
+# Todo lo que vive en filtradas/ es interno: la salida del pipeline y los
+# scripts sueltos de diagnóstico o mantenimiento. No es código del proyecto.
+# Se mantiene la carpeta (con .gitkeep) porque Docker la monta como volumen.
+filtradas/*
+!filtradas/.gitkeep
 .env
 __pycache__/
 *.pyc
