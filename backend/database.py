@@ -6,7 +6,7 @@ from typing import Iterable
 
 from dotenv import load_dotenv
 
-from backend.filtros.texto import canonicalizar_link, generar_dedupe_key, normalizar_identidad
+from backend.filtros.texto import canonicalizar_link, coincide_bloqueada, compilar_bloqueadas, generar_dedupe_key
 
 load_dotenv()
 DB_PATH = os.getenv("DATABASE_URL", "./job_tracker.db")
@@ -199,31 +199,32 @@ def create_aplicacion(data: dict) -> dict | None:
         raise ValueError("El estado inicial debe ser pendiente o aplicado")
 
     dedupe_key = data.get("dedupe_key") or generar_dedupe_key(data)
-    conexion = get_connection()
-    existe = conexion.execute(
-        "SELECT id FROM job_applications WHERE dedupe_key = ?", (dedupe_key,)
-    ).fetchone()
-    if existe:
-        conexion.close()
-        return None
-
     fecha_aplicacion = datetime.now().isoformat() if estado == "aplicado" else None
-    cursor = conexion.execute("""
-        INSERT INTO job_applications (
-            perfil_id, titulo, empresa, ubicacion, descripcion, link, dedupe_key,
-            fuente, score, score_detalle, estado, fecha_aplicacion
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        perfil["id"], data.get("titulo", ""), data.get("empresa", ""),
-        data.get("ubicacion", ""), data.get("descripcion", ""),
-        canonicalizar_link(data.get("link")), dedupe_key,
-        data.get("fuente", ""), data.get("score", 0),
-        json.dumps(data.get("score_detalle", {}), ensure_ascii=False),
-        estado, fecha_aplicacion,
-    ))
-    aplicacion_id = cursor.lastrowid
-    conexion.commit()
-    conexion.close()
+    conexion = get_connection()
+    try:
+        # Se deja que decida la restriccion UNIQUE en vez de un SELECT previo:
+        # con dos peticiones a la vez (un doble clic en "Guardar" basta) el
+        # chequeo pasaba en ambas y el segundo INSERT reventaba con un 500.
+        cursor = conexion.execute("""
+            INSERT INTO job_applications (
+                perfil_id, titulo, empresa, ubicacion, descripcion, link, dedupe_key,
+                fuente, score, score_detalle, estado, fecha_aplicacion
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            perfil["id"], data.get("titulo") or "", data.get("empresa") or "",
+            data.get("ubicacion") or "", data.get("descripcion") or "",
+            canonicalizar_link(data.get("link")), dedupe_key,
+            data.get("fuente") or "", data.get("score") or 0,
+            json.dumps(data.get("score_detalle") or {}, ensure_ascii=False),
+            estado, fecha_aplicacion,
+        ))
+        aplicacion_id = cursor.lastrowid
+        conexion.commit()
+    except sqlite3.IntegrityError:
+        # Ya estaba guardada: el endpoint lo traduce a 409.
+        return None
+    finally:
+        conexion.close()
     return get_aplicacion(aplicacion_id)
 
 
@@ -394,13 +395,17 @@ def get_resultados(
         condiciones.append("fuente = ?")
         parametros.append(fuente)
     if solo_revisar:
+        # "Solo por revisar" son justamente las vacantes SIN puntaje, asi que un
+        # rango de score aqui daria una condicion imposible (score IS NULL AND
+        # score >= n) y la lista saldria vacia siempre. Manda el checkbox.
         condiciones.append("score IS NULL")
-    if score_min is not None:
-        condiciones.append("(score IS NOT NULL AND score >= ?)")
-        parametros.append(score_min)
-    if score_max is not None:
-        condiciones.append("(score IS NOT NULL AND score <= ?)")
-        parametros.append(score_max)
+    else:
+        if score_min is not None:
+            condiciones.append("(score IS NOT NULL AND score >= ?)")
+            parametros.append(score_min)
+        if score_max is not None:
+            condiciones.append("(score IS NOT NULL AND score <= ?)")
+            parametros.append(score_max)
     if decision:
         condiciones.append("json_extract(detalle, '$.decision') = ?")
         parametros.append(decision)
@@ -409,8 +414,12 @@ def get_resultados(
         if terminos:
             partes_termino = []
             for termino in terminos:
-                comodin = f"%{termino}%"
-                partes_termino.append("(titulo LIKE ? OR empresa LIKE ? OR descripcion LIKE ?)")
+                # Sin escapar, "100%" hace match con todo y "c_o" con "cto".
+                escapado = termino.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                comodin = f"%{escapado}%"
+                partes_termino.append(
+                    "(titulo LIKE ? ESCAPE '\\' OR empresa LIKE ? ESCAPE '\\' "
+                    "OR descripcion LIKE ? ESCAPE '\\')")
                 parametros.extend([comodin, comodin, comodin])
             condiciones.append("(" + " OR ".join(partes_termino) + ")")
 
@@ -450,25 +459,21 @@ def purgar_empresas_bloqueadas(empresas_bloqueadas) -> int:
     """Borra del histórico las vacantes de empresas vetadas. Se llama en cada
     corrida del pipeline, así que agregar una empresa a la lista y procesar
     limpia también lo que ya estaba guardado de antes."""
-    claves = [normalizar_identidad(empresa) for empresa in (empresas_bloqueadas or [])]
-    claves = [clave for clave in claves if clave]
-    if not claves:
+    patrones = compilar_bloqueadas(empresas_bloqueadas)
+    if not patrones:
         return 0
 
     conexion = get_connection()
-    filas = conexion.execute("SELECT id, empresa, titulo FROM resultados").fetchall()
-    ids = []
-    for fila in filas:
-        campos = normalizar_identidad(fila["empresa"]) + "|" + normalizar_identidad(fila["titulo"])
-        if any(clave in campos for clave in claves):
-            ids.append(fila["id"])
-
-    if ids:
-        marcadores = ",".join("?" for _ in ids)
-        conexion.execute(f"DELETE FROM resultados WHERE id IN ({marcadores})", ids)
-        conexion.commit()
-    conexion.close()
-    return len(ids)
+    try:
+        filas = conexion.execute("SELECT id, empresa, titulo FROM resultados").fetchall()
+        ids = [f["id"] for f in filas if coincide_bloqueada(f["empresa"], f["titulo"], patrones)]
+        if ids:
+            marcadores = ",".join("?" for _ in ids)
+            conexion.execute(f"DELETE FROM resultados WHERE id IN ({marcadores})", ids)
+            conexion.commit()
+        return len(ids)
+    finally:
+        conexion.close()
 
 
 def get_conteo_resultados() -> dict:

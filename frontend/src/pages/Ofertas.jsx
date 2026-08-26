@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const API = '/api'
 const ESTADOS = ['pendiente', 'aplicado', 'cv_enviado', 'hr_contacto', 'prueba_tecnica', 'entrevista_rrhh', 'entrevista_tecnica', 'oferta', 'rechazado', 'ghosted']
@@ -13,37 +13,70 @@ export default function Ofertas() {
     const [seleccionada, setSeleccionada] = useState(null)
     const [notas, setNotas] = useState('')
     const [error, setError] = useState('')
+    const version = useRef(0)
 
     const cargar = async () => {
+        // Guard de version: al cambiar dos filtros seguidos, una respuesta lenta
+        // de la primera peticion podia llegar despues y pisar la lista correcta.
+        const miVersion = ++version.current
         try {
             const params = new URLSearchParams()
             if (estado) params.set('estado', estado)
             if (fuente) params.set('fuente', fuente)
             const respuesta = await fetch(API + '/aplicaciones?' + params)
             if (!respuesta.ok) throw new Error('No fue posible cargar las vacantes')
-            setOfertas(await respuesta.json())
-        } catch (err) { setError(err.message) }
+            const data = await respuesta.json()
+            if (miVersion !== version.current) return
+            setOfertas(data)
+            setError('')
+        } catch (err) {
+            if (miVersion === version.current) setError(err.message)
+        }
     }
 
     useEffect(() => { cargar() }, [estado, fuente])
 
+    // Envuelve una mutacion: sin esto, un fetch rechazado (red caida) o una
+    // respuesta que no fuera JSON (un 502 de nginx devuelve HTML) reventaba
+    // dentro del propio manejo de error y la accion fallaba en silencio.
+    const mutar = async (peticion, mensajeError) => {
+        setError('')
+        try {
+            const respuesta = await peticion()
+            if (!respuesta.ok) {
+                const data = await respuesta.json().catch(() => ({}))
+                throw new Error(data.detail || mensajeError)
+            }
+            return true
+        } catch (err) {
+            setError(err.message || mensajeError)
+            return false
+        }
+    }
+
     const cambiarEstado = async (id, nuevoEstado) => {
-        const respuesta = await fetch(API + '/aplicaciones/' + id + '/estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ estado: nuevoEstado }) })
-        if (!respuesta.ok) setError((await respuesta.json()).detail || 'No fue posible actualizar el estado')
+        await mutar(
+            () => fetch(API + '/aplicaciones/' + id + '/estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ estado: nuevoEstado }) }),
+            'No fue posible actualizar el estado',
+        )
         await cargar()
     }
 
     const guardarNotas = async () => {
-        const respuesta = await fetch(API + '/aplicaciones/' + seleccionada.id + '/notas', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notas }) })
-        if (!respuesta.ok) setError((await respuesta.json()).detail || 'No fue posible guardar las notas')
-        setSeleccionada(null)
+        const ok = await mutar(
+            () => fetch(API + '/aplicaciones/' + seleccionada.id + '/notas', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notas }) }),
+            'No fue posible guardar las notas',
+        )
+        if (ok) setSeleccionada(null)
         await cargar()
     }
 
     const eliminar = async id => {
         if (!confirm('¿Eliminar esta vacante guardada?')) return
-        const respuesta = await fetch(API + '/aplicaciones/' + id, { method: 'DELETE' })
-        if (!respuesta.ok) setError((await respuesta.json()).detail || 'No fue posible eliminar la vacante')
+        await mutar(
+            () => fetch(API + '/aplicaciones/' + id, { method: 'DELETE' }),
+            'No fue posible eliminar la vacante',
+        )
         await cargar()
     }
 

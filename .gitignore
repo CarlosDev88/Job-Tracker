@@ -7,6 +7,10 @@ icons/
 
 raw_data/*.json
 
+# Respaldos de la base: contienen tu CV, tu historial de postulaciones y tus
+# notas privadas. Nunca deben salir de tu maquina.
+respaldos/
+
 # Todo lo que vive en filtradas/ es interno: la salida del pipeline y los
 # scripts sueltos de diagnóstico o mantenimiento. No es código del proyecto.
 # Se mantiene la carpeta (con .gitkeep) porque Docker la monta como volumen.

@@ -66,8 +66,11 @@ function useResultados(tipoResultado, filtros, extraParams, activo) {
 
     useEffect(() => {
         if (!activo) return
-        const demora = filtros.busqueda ? 300 : 0
-        const temporizador = setTimeout(recargar, demora)
+        // Debounce uniforme: el slider de coincidencia emite un onChange por
+        // cada paso, asi que arrastrarlo de 0 a 80 lanzaba ~80 peticiones.
+        // Como cada cambio de filtro recrea `recargar`, el cleanup cancela la
+        // anterior y solo sobrevive la ultima.
+        const temporizador = setTimeout(recargar, 250)
         return () => clearTimeout(temporizador)
     }, [activo, recargar])
 
@@ -95,7 +98,7 @@ export default function Dashboard({ onNavigate }) {
 
     const cargarErroresPipeline = async () => {
         try {
-            const respuesta = await fetch(API + '/pipeline/filtradas')
+            const respuesta = await fetch(API + '/pipeline/estado')
             if (respuesta.ok) {
                 const data = await respuesta.json()
                 setErroresPipeline(data.errores?.length || 0)
@@ -109,8 +112,11 @@ export default function Dashboard({ onNavigate }) {
         'vacante', filtrosVacantes,
         {
             ...(filtrosVacantes.fuente ? { fuente: filtrosVacantes.fuente } : {}),
-            score_min: String(filtrosVacantes.rangoScore[0]),
-            score_max: String(filtrosVacantes.rangoScore[1]),
+            // Solo se manda el rango si el usuario lo movió: filtrar por score
+            // deja fuera las vacantes sin puntuar (las marcadas REVISAR), y con
+            // el rango completo esas deben verse igual que el resto.
+            ...(filtrosVacantes.rangoScore[0] > 0 ? { score_min: String(filtrosVacantes.rangoScore[0]) } : {}),
+            ...(filtrosVacantes.rangoScore[1] < 100 ? { score_max: String(filtrosVacantes.rangoScore[1]) } : {}),
             ...(filtrosVacantes.soloRevisar ? { solo_revisar: 'true' } : {}),
         },
         tab === 'vacantes',
@@ -120,6 +126,21 @@ export default function Dashboard({ onNavigate }) {
         { ...(filtrosFeed.decision ? { decision: filtrosFeed.decision } : {}) },
         tab === 'feed',
     )
+
+    // Si el total se reduce (al purgar empresas bloqueadas, o al procesar de
+    // nuevo) y estabas en una pagina que ya no existe, la vista quedaba vacia
+    // con los controles de paginacion escondidos y sin forma de volver.
+    useEffect(() => {
+        if (vacantesQuery.cargando) return
+        const ultima = Math.max(0, Math.ceil(vacantesQuery.total / POR_PAGINA) - 1)
+        if (filtrosVacantes.pagina > ultima) setFiltrosVacantes(c => ({ ...c, pagina: ultima }))
+    }, [vacantesQuery.total, vacantesQuery.cargando, filtrosVacantes.pagina])
+
+    useEffect(() => {
+        if (feedQuery.cargando) return
+        const ultima = Math.max(0, Math.ceil(feedQuery.total / POR_PAGINA) - 1)
+        if (filtrosFeed.pagina > ultima) setFiltrosFeed(c => ({ ...c, pagina: ultima }))
+    }, [feedQuery.total, feedQuery.cargando, filtrosFeed.pagina])
 
     const recargarTodo = async () => {
         await Promise.all([cargarConteos(), cargarErroresPipeline(), vacantesQuery.recargar(), feedQuery.recargar()])
@@ -247,7 +268,7 @@ export default function Dashboard({ onNavigate }) {
                         </select>
                     </label>
                 )}
-                {tab === 'vacantes' && (
+                {tab === 'vacantes' && !filtrosVacantes.soloRevisar && (
                     <div className="flex flex-col gap-1">
                         <span className="text-[10.5px] font-mono uppercase tracking-wide text-ink-muted">
                             Coincidencia: {filtrosVacantes.rangoScore[0]}% – {filtrosVacantes.rangoScore[1]}%

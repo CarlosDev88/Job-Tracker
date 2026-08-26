@@ -18,7 +18,7 @@ from backend.database import (
     update_notas,
     update_perfil_activo,
 )
-from backend.pipeline import filtrar_raw_data, leer_filtradas
+from backend.pipeline import filtrar_raw_data, leer_estado, leer_filtradas
 
 app = FastAPI(title="Job Tracker API", version="1.0.0")
 app.add_middleware(
@@ -97,6 +97,11 @@ def filtrar() -> dict:
 @app.get("/pipeline/filtradas")
 def filtradas() -> dict:
     return leer_filtradas()
+
+
+@app.get("/pipeline/estado")
+def estado_pipeline() -> dict:
+    return leer_estado()
 
 
 @app.get("/resultados/conteos")

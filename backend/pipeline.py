@@ -163,7 +163,18 @@ def filtrar_raw_data() -> dict:
             if not isinstance(item, dict):
                 stats["descartadas"] += 1
                 continue
-            vacante = normalizar_vacante(item, fuente)
+            try:
+                vacante = normalizar_vacante(item, fuente)
+            except Exception as error:  # noqa: BLE001
+                # Un item con una forma inesperada se salta y se registra; antes
+                # se llevaba por delante la corrida completa (500) y no se
+                # procesaba ni un solo archivo de los validos.
+                errores.append({
+                    "archivo": os.path.basename(archivo),
+                    "mensaje": f"item ignorado: {error}",
+                })
+                stats["descartadas"] += 1
+                continue
             if not vacante or not vacante.get("descripcion", "").strip():
                 stats["descartadas"] += 1
                 continue
@@ -233,11 +244,14 @@ def filtrar_raw_data() -> dict:
     # Histórico: además del archivo filtradas.json (snapshot de la corrida
     # actual), cada resultado se guarda/actualiza en SQLite por dedupe_key
     # para acumular histórico entre corridas sin duplicar filas.
+    # El guardado va PRIMERO y la purga despues: al reves, si guardar_resultados
+    # fallaba (disco lleno, dato invalido) el historico ya estaba borrado y no
+    # habia nada que lo reemplazara.
+    guardar_resultados(resultados_fusionados)
+
     # Purga del histórico: si agregaste una empresa a la lista negra después de
     # haberla guardado, esta corrida también borra lo viejo.
     stats["purgadas_historico"] = purgar_empresas_bloqueadas(empresas_bloqueadas)
-
-    guardar_resultados(resultados_fusionados)
 
     grupos = _ordenar(resultados_fusionados)
     stats["filtradas"] = len(resultados_fusionados)
@@ -253,11 +267,40 @@ def filtrar_raw_data() -> dict:
     return {"ok": True, "stats": stats, "errores": errores}
 
 
-def leer_filtradas() -> dict:
+def leer_estado() -> dict:
+    """Solo los metadatos de la última corrida (stats y errores), sin arrastrar
+    las listas completas de vacantes/feed. El Dashboard lo usa para el aviso de
+    archivos inválidos: pedir el JSON entero para eso descarga cientos de kB."""
+    vacio = {"version": FORMATO_VERSION, "generado_en": None, "stats": {}, "errores": []}
+    contenido = _cargar_filtradas()
+    if not isinstance(contenido, dict):
+        return vacio
+    return {
+        "version": contenido.get("version", FORMATO_VERSION),
+        "generado_en": contenido.get("generado_en"),
+        "stats": contenido.get("stats") or {},
+        "errores": contenido.get("errores") or [],
+    }
+
+
+def _cargar_filtradas():
+    """Lee filtradas.json tolerando que no exista, este truncado a medias o
+    venga de un formato viejo. Sin esto, un archivo corrupto dejaba /pipeline/
+    devolviendo 500 de forma permanente hasta borrarlo a mano."""
     if not os.path.exists(FILTRADAS_PATH):
-        return {"version": FORMATO_VERSION, "vacantes": [], "feed": [], "stats": {}, "errores": []}
-    with open(FILTRADAS_PATH, "r", encoding="utf-8") as archivo:
-        contenido = json.load(archivo)
+        return None
+    try:
+        with open(FILTRADAS_PATH, "r", encoding="utf-8") as archivo:
+            return json.load(archivo)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def leer_filtradas() -> dict:
+    vacio = {"version": FORMATO_VERSION, "vacantes": [], "feed": [], "stats": {}, "errores": []}
+    contenido = _cargar_filtradas()
+    if contenido is None:
+        return vacio
 
     if isinstance(contenido, list):
         contenido = {
@@ -268,7 +311,13 @@ def leer_filtradas() -> dict:
             "errores": [],
         }
 
-    resultados = contenido.get("vacantes", []) + contenido.get("feed", [])
+    if not isinstance(contenido, dict):
+        return vacio
+
+    # Las listas pueden venir en null si el archivo fue editado a mano.
+    contenido["vacantes"] = contenido.get("vacantes") or []
+    contenido["feed"] = contenido.get("feed") or []
+    resultados = contenido["vacantes"] + contenido["feed"]
     tracking = get_tracking_por_claves([resultado.get("dedupe_key") for resultado in resultados])
     for resultado in resultados:
         resultado["tracking"] = tracking.get(resultado.get("dedupe_key"))

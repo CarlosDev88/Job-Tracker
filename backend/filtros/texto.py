@@ -30,28 +30,59 @@ def normalizar_texto(texto: str | None) -> str:
     return re.sub(r"\s+", " ", texto).strip().lower()
 
 
-def normalizar_identidad(texto: str | None) -> str:
-    """Normaliza un nombre de empresa a su forma más comparable: sin tildes,
-    minúsculas y sin espacios ni puntuación. Así 'Baires Dev', 'BairesDev LLC'
-    y 'BAIRESDEV S.A.' colapsan todas a algo que contiene 'bairesdev'."""
-    return re.sub(r"[^a-z0-9]", "", normalizar_texto(texto))
+def patron_empresa(nombre: str | None):
+    """Compila el patron para reconocer una empresa vetada escrita de cualquier
+    forma: 'BairesDev', 'Baires Dev', 'BAIRESDEV S.A.' o 'Baires-Dev'.
+
+    Se permite cualquier separador ENTRE los caracteres, pero se exige que el
+    nombre empiece y termine en frontera de palabra. Sin esa frontera, un match
+    por subcadena convierte 'HP' en algo que descarta 'PHP Developer' y 'IT' en
+    algo que descarta 'Digital Solutions' — y como la purga borra del historico,
+    esa perdida seria permanente."""
+    base = re.sub(r"[^a-z0-9]", "", normalizar_texto(nombre))
+    if not base:
+        return None
+    cuerpo = r"[^a-z0-9]*".join(re.escape(caracter) for caracter in base)
+    return re.compile(r"(?<![a-z0-9])" + cuerpo + r"(?![a-z0-9])")
+
+
+def compilar_bloqueadas(empresas_bloqueadas) -> list:
+    return [p for p in (patron_empresa(e) for e in (empresas_bloqueadas or [])) if p]
+
+
+def texto_identidad(empresa: str | None, titulo: str | None) -> str:
+    """Empresa y titulo juntos: en los avisos de reclutadores la empresa suele
+    venir vacia y el nombre aparece solo en el titulo. El separador evita que un
+    patron haga match cruzando el final de uno con el principio del otro."""
+    return normalizar_texto(empresa) + " | " + normalizar_texto(titulo)
 
 
 def esta_bloqueada(vacante: dict, empresas_bloqueadas) -> bool:
-    """True si la vacante pertenece a una empresa vetada. Compara contra
-    empresa y título (donde suelen aparecer los avisos de reclutadores)."""
-    if not empresas_bloqueadas:
+    """True si la vacante pertenece a una empresa vetada."""
+    return coincide_bloqueada(
+        vacante.get("empresa"), vacante.get("titulo"),
+        compilar_bloqueadas(empresas_bloqueadas),
+    )
+
+
+def coincide_bloqueada(empresa, titulo, patrones) -> bool:
+    """Variante que recibe los patrones ya compilados, para no recompilarlos en
+    cada fila cuando se recorre el historico completo."""
+    if not patrones:
         return False
-    campos = normalizar_identidad(vacante.get("empresa")) + "|" + normalizar_identidad(vacante.get("titulo"))
-    for empresa in empresas_bloqueadas:
-        clave = normalizar_identidad(empresa)
-        if clave and clave in campos:
-            return True
-    return False
+    texto = texto_identidad(empresa, titulo)
+    return any(patron.search(texto) for patron in patrones)
 
 
 def contiene(texto: str, termino: str) -> bool:
     return bool(re.search(r"(?<!\w)" + re.escape(termino) + r"(?!\w)", texto))
+
+
+# Esquemas que el frontend puede poner en un href sin riesgo. Los datos vienen
+# de paginas de terceros, y un link "javascript:..." colado en un JSON del
+# scraper se convertiria en ejecucion de codigo al hacer clic, en el mismo
+# origen donde viven el CV y el historial de postulaciones.
+PATRON_ESQUEMA = re.compile(r"^[a-z][a-z0-9+.\-]*:", re.IGNORECASE)
 
 
 def canonicalizar_link(link: str | None) -> str:
@@ -59,7 +90,9 @@ def canonicalizar_link(link: str | None) -> str:
         return ""
     link = str(link).strip()
     if not re.match(r"https?://", link, re.IGNORECASE):
-        return link.rstrip("/")
+        # Sin esquema puede ser una ruta relativa o un dominio suelto: se deja.
+        # Con un esquema que no sea http(s), se descarta.
+        return "" if PATRON_ESQUEMA.match(link) else link.rstrip("/")
 
     parsed = urlparse(link)
     query = [
@@ -93,8 +126,22 @@ def normalizar_titulo_dedupe(titulo: str | None) -> str:
     return re.sub(r"\s+", " ", texto).strip()
 
 
+# Un link a un perfil de persona (linkedin.com/in/...) identifica al autor del
+# post, no a la vacante: el scraper lo usa como link cuando el aviso no trae uno
+# propio. Si se tomara como identidad, todas las vacantes que publique un mismo
+# reclutador colapsarian en un unico registro y se perderian las demas.
+PATRON_PERFIL_PERSONA = re.compile(
+    r"^https?://([a-z0-9-]+\.)*linkedin\.com/(in|pub)/", re.IGNORECASE)
+
+
+def es_link_de_perfil(link: str | None) -> bool:
+    return bool(link) and bool(PATRON_PERFIL_PERSONA.match(link.strip()))
+
+
 def generar_dedupe_key(vacante: dict) -> str:
     link = canonicalizar_link(vacante.get("link"))
+    if es_link_de_perfil(link):
+        link = ""
     if link:
         base = f"link|{link}"
     else:

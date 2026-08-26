@@ -1,2 +1,4 @@
-pytest==8.3.5
-httpx==0.27.0
+# Dependencias solo para correr los tests (no van en la imagen de produccion).
+-r requirements.txt
+pytest==9.1.1
+httpx==0.28.1
