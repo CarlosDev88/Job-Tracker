@@ -4,7 +4,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from glob import glob
 
-from backend.database import get_perfil_activo, get_tracking_por_claves
+from backend.database import get_perfil_activo, get_tracking_por_claves, guardar_resultados
 from backend.filtros.intencion import detectar_intencion
 from backend.filtros.keywords import filtrar_vacante
 from backend.filtros.normalizador import normalizar_vacante
@@ -13,6 +13,7 @@ from backend.filtros.texto import (
     generar_dedupe_key,
     normalizar_texto,
     normalizar_titulo_dedupe,
+    sanear_estructura,
 )
 
 UMBRAL_SIMILITUD_REPOST = 0.85
@@ -161,6 +162,7 @@ def filtrar_raw_data() -> dict:
                 stats["descartadas"] += 1
                 continue
 
+            vacante = sanear_estructura(vacante)
             vacante["fuente"] = fuente
             vacante["link"] = canonicalizar_link(vacante.get("link"))
             vacante["dedupe_key"] = generar_dedupe_key(vacante)
@@ -213,6 +215,11 @@ def filtrar_raw_data() -> dict:
 
     resultados_fusionados, fusiones_extra = _fusionar_reposts(list(candidatos.values()))
     stats["duplicadas"] += fusiones_extra
+
+    # Histórico: además del archivo filtradas.json (snapshot de la corrida
+    # actual), cada resultado se guarda/actualiza en SQLite por dedupe_key
+    # para acumular histórico entre corridas sin duplicar filas.
+    guardar_resultados(resultados_fusionados)
 
     grupos = _ordenar(resultados_fusionados)
     stats["filtradas"] = len(resultados_fusionados)

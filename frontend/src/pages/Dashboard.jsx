@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import ScoreBadge from '../components/ScoreBadge'
 import DecisionBadge from '../components/DecisionBadge'
 import RevisarBadge from '../components/RevisarBadge'
@@ -11,10 +11,10 @@ const ETIQUETAS_ESTADO = {
     entrevista_rrhh: 'Entrevista RR. HH.', entrevista_tecnica: 'Entrevista técnica',
     oferta: 'Oferta recibida', rechazado: 'Rechazada', ghosted: 'Sin respuesta',
 }
-const FUENTES = ['linkedin_extension', 'linkedin_publicaciones', 'linkedin_feed', 'getonbrd']
+const FUENTES_VACANTES = ['linkedin_extension', 'linkedin_publicaciones', 'getonbrd']
 // Nombres legibles por fuente: linkedin_extension = resultados de búsqueda de empleos en LinkedIn,
 // linkedin_publicaciones = posts sueltos de LinkedIn que anuncian una vacante,
-// linkedin_feed = feed general de LinkedIn (se clasifica aparte, pestaña Feed),
+// linkedin_feed = feed general de LinkedIn (se clasifica aparte, pestaña Publicaciones),
 // getonbrd = vacantes estructuradas de GetOnBrd.
 const ETIQUETAS_FUENTE = {
     linkedin_extension: 'Búsqueda de empleos (LinkedIn)',
@@ -26,35 +26,104 @@ const nombreFuente = valor => ETIQUETAS_FUENTE[valor] || valor
 
 const inputClase = 'bg-surface border border-hairline-strong rounded px-3 py-1.5 text-[13px] text-ink-primary focus:outline-none focus:border-accent transition-colors'
 
-export default function Dashboard({ onNavigate }) {
-    const [documento, setDocumento] = useState({ vacantes: [], feed: [], stats: {}, errores: [] })
+const FILTROS_VACANTES_INICIAL = { busqueda: '', fuente: '', rangoScore: [0, 100], soloRevisar: false, pagina: 0 }
+const FILTROS_FEED_INICIAL = { busqueda: '', decision: '', pagina: 0 }
+
+// Hook: mantiene el estado de filtros de UNA pestaña y trae sus resultados
+// del backend (/resultados) de forma totalmente independiente de la otra
+// pestaña. La búsqueda se debounce para no golpear el backend en cada tecla.
+function useResultados(tipoResultado, filtros, extraParams, activo) {
+    const [datos, setDatos] = useState({ items: [], total: 0 })
     const [cargando, setCargando] = useState(true)
+    const [error, setError] = useState('')
+    const version = useRef(0)
+
+    const recargar = useCallback(async () => {
+        const miVersion = ++version.current
+        setCargando(true)
+        try {
+            const params = new URLSearchParams({
+                tipo_resultado: tipoResultado,
+                pagina: String(filtros.pagina + 1),
+                por_pagina: String(POR_PAGINA),
+                ...extraParams,
+            })
+            if (filtros.busqueda) params.set('busqueda', filtros.busqueda)
+            const respuesta = await fetch(API + '/resultados?' + params.toString())
+            if (!respuesta.ok) throw new Error('No fue posible cargar los resultados')
+            const data = await respuesta.json()
+            if (miVersion === version.current) {
+                setDatos(data)
+                setError('')
+            }
+        } catch (err) {
+            if (miVersion === version.current) setError(err.message)
+        } finally {
+            if (miVersion === version.current) setCargando(false)
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tipoResultado, filtros.pagina, filtros.busqueda, JSON.stringify(extraParams)])
+
+    useEffect(() => {
+        if (!activo) return
+        const demora = filtros.busqueda ? 300 : 0
+        const temporizador = setTimeout(recargar, demora)
+        return () => clearTimeout(temporizador)
+    }, [activo, recargar])
+
+    return { ...datos, cargando, error, recargar }
+}
+
+export default function Dashboard({ onNavigate }) {
+    const [conteos, setConteos] = useState({ vacantes: 0, feed: 0, pendientes_revisar: 0 })
+    const [erroresPipeline, setErroresPipeline] = useState(0)
     const [procesando, setProcesando] = useState(false)
     const [error, setError] = useState('')
     const [detalle, setDetalle] = useState(null)
     const [guardando, setGuardando] = useState(false)
-    const [pagina, setPagina] = useState(0)
     const [tab, setTab] = useState('vacantes')
-    const [busqueda, setBusqueda] = useState('')
-    const [fuenteFiltro, setFuenteFiltro] = useState('')
-    const [rangoScore, setRangoScore] = useState([0, 100])
-    const [soloRevisar, setSoloRevisar] = useState(false)
-    const [decisionFiltro, setDecisionFiltro] = useState('')
 
-    const cargar = async () => {
+    const [filtrosVacantes, setFiltrosVacantes] = useState(FILTROS_VACANTES_INICIAL)
+    const [filtrosFeed, setFiltrosFeed] = useState(FILTROS_FEED_INICIAL)
+
+    const cargarConteos = async () => {
         try {
-            const respuesta = await fetch(API + '/pipeline/filtradas')
-            if (!respuesta.ok) throw new Error('No fue posible cargar el ranking')
-            setDocumento(await respuesta.json())
-        } catch (err) {
-            setError(err.message)
-        } finally {
-            setCargando(false)
-        }
+            const respuesta = await fetch(API + '/resultados/conteos')
+            if (respuesta.ok) setConteos(await respuesta.json())
+        } catch { /* silencioso: no bloquea el resto del dashboard */ }
     }
 
-    useEffect(() => { cargar() }, [])
-    useEffect(() => { setPagina(0) }, [tab, busqueda, fuenteFiltro, rangoScore, soloRevisar, decisionFiltro])
+    const cargarErroresPipeline = async () => {
+        try {
+            const respuesta = await fetch(API + '/pipeline/filtradas')
+            if (respuesta.ok) {
+                const data = await respuesta.json()
+                setErroresPipeline(data.errores?.length || 0)
+            }
+        } catch { /* silencioso */ }
+    }
+
+    useEffect(() => { cargarConteos(); cargarErroresPipeline() }, [])
+
+    const vacantesQuery = useResultados(
+        'vacante', filtrosVacantes,
+        {
+            ...(filtrosVacantes.fuente ? { fuente: filtrosVacantes.fuente } : {}),
+            score_min: String(filtrosVacantes.rangoScore[0]),
+            score_max: String(filtrosVacantes.rangoScore[1]),
+            ...(filtrosVacantes.soloRevisar ? { solo_revisar: 'true' } : {}),
+        },
+        tab === 'vacantes',
+    )
+    const feedQuery = useResultados(
+        'feed_post', filtrosFeed,
+        { ...(filtrosFeed.decision ? { decision: filtrosFeed.decision } : {}) },
+        tab === 'feed',
+    )
+
+    const recargarTodo = async () => {
+        await Promise.all([cargarConteos(), cargarErroresPipeline(), vacantesQuery.recargar(), feedQuery.recargar()])
+    }
 
     const procesar = async () => {
         setProcesando(true)
@@ -63,7 +132,7 @@ export default function Dashboard({ onNavigate }) {
             const respuesta = await fetch(API + '/pipeline/filtrar', { method: 'POST' })
             const data = await respuesta.json()
             if (!respuesta.ok) throw new Error(data.detail || 'No fue posible procesar los JSON')
-            await cargar()
+            await recargarTodo()
         } catch (err) {
             setError(err.message)
         } finally {
@@ -87,7 +156,8 @@ export default function Dashboard({ onNavigate }) {
             })
             const data = await respuesta.json()
             if (!respuesta.ok) throw new Error(data.detail || 'No fue posible guardar la vacante')
-            await cargar()
+            if (tab === 'vacantes') await vacantesQuery.recargar()
+            else await feedQuery.recargar()
             setDetalle(current => current ? { ...current, tracking: data } : null)
         } catch (err) {
             setError(err.message)
@@ -96,39 +166,22 @@ export default function Dashboard({ onNavigate }) {
         }
     }
 
-    const vacantesTodas = documento.vacantes || []
-    const feedTodo = documento.feed || []
-    const fuentesDisponibles = useMemo(() => {
-        const base = tab === 'vacantes' ? vacantesTodas : feedTodo
-        return Array.from(new Set(base.map(item => item.fuente).filter(Boolean)))
-    }, [tab, vacantesTodas, feedTodo])
+    const query = tab === 'vacantes' ? vacantesQuery : feedQuery
+    const filtros = tab === 'vacantes' ? filtrosVacantes : filtrosFeed
+    const setFiltros = tab === 'vacantes' ? setFiltrosVacantes : setFiltrosFeed
 
-    const aplicarFiltros = (lista, { conFuente = true, conScore = false } = {}) => lista.filter(item => {
-        if (conFuente && fuenteFiltro && item.fuente !== fuenteFiltro) return false
-        if (conScore && (item.score < rangoScore[0] || item.score > rangoScore[1])) return false
-        if (busqueda) {
-            const texto = [item.titulo, item.empresa, item.descripcion].filter(Boolean).join(' ').toLowerCase()
-            if (!texto.includes(busqueda.toLowerCase())) return false
-        }
-        return true
-    })
+    const cambiarPagina = fn => setFiltros(current => ({ ...current, pagina: fn(current.pagina) }))
+    const totalPaginas = Math.max(1, Math.ceil(query.total / POR_PAGINA))
 
-    const pendientesRevisar = useMemo(() => vacantesTodas.filter(item => item.score === null).length, [vacantesTodas])
-    const vacantes = useMemo(() => {
-        const filtradas = aplicarFiltros(vacantesTodas, { conFuente: true, conScore: true })
-        return soloRevisar ? filtradas.filter(item => item.score === null) : filtradas
-    }, [vacantesTodas, fuenteFiltro, rangoScore, busqueda, soloRevisar])
-    const feed = useMemo(() => {
-        const filtradas = aplicarFiltros(feedTodo, { conFuente: false })
-        return decisionFiltro ? filtradas.filter(item => item.detalle?.decision === decisionFiltro) : filtradas
-    }, [feedTodo, busqueda, decisionFiltro])
+    const hayFiltrosActivosVacantes = filtrosVacantes.busqueda || filtrosVacantes.fuente
+        || filtrosVacantes.rangoScore[0] > 0 || filtrosVacantes.rangoScore[1] < 100 || filtrosVacantes.soloRevisar
+    const hayFiltrosActivosFeed = filtrosFeed.busqueda || filtrosFeed.decision
+    const hayFiltrosActivos = tab === 'vacantes' ? hayFiltrosActivosVacantes : hayFiltrosActivosFeed
 
-    const listaActiva = tab === 'vacantes' ? vacantes : feed
-    const totalPaginas = Math.max(1, Math.ceil(listaActiva.length / POR_PAGINA))
-    const paginaSegura = Math.min(pagina, totalPaginas - 1)
-    const paginaItems = listaActiva.slice(paginaSegura * POR_PAGINA, (paginaSegura + 1) * POR_PAGINA)
-    const hayFiltrosActivos = busqueda || fuenteFiltro || rangoScore[0] > 0 || rangoScore[1] < 100 || soloRevisar || decisionFiltro
-    const limpiarFiltros = () => { setBusqueda(''); setFuenteFiltro(''); setRangoScore([0, 100]); setSoloRevisar(false); setDecisionFiltro('') }
+    const limpiarFiltros = () => {
+        if (tab === 'vacantes') setFiltrosVacantes(FILTROS_VACANTES_INICIAL)
+        else setFiltrosFeed(FILTROS_FEED_INICIAL)
+    }
 
     return (
         <div>
@@ -147,20 +200,21 @@ export default function Dashboard({ onNavigate }) {
             </div>
 
             {error && <Mensaje tipo="error">{error}</Mensaje>}
-            {documento.errores?.length > 0 && <Mensaje tipo="warning">Se omitieron {documento.errores.length} archivo(s) inválidos.</Mensaje>}
+            {query.error && <Mensaje tipo="error">{query.error}</Mensaje>}
+            {erroresPipeline > 0 && <Mensaje tipo="warning">Se omitieron {erroresPipeline} archivo(s) inválidos.</Mensaje>}
 
             <div className="grid grid-cols-3 sm:flex sm:items-stretch mt-6 mb-8 border border-hairline rounded overflow-hidden bg-surface">
-                <Stat label="Resultados" value={vacantesTodas.length + feedTodo.length} />
-                <Stat label="Vacantes" value={vacantesTodas.length} />
-                <Stat label="Feed" value={feedTodo.length} ultimo />
+                <Stat label="Resultados" value={conteos.vacantes + conteos.feed} />
+                <Stat label="Vacantes" value={conteos.vacantes} />
+                <Stat label="Publicaciones" value={conteos.feed} ultimo />
             </div>
 
             <div className="flex items-center gap-1 border-b border-hairline-strong mb-4">
                 <TabButton activo={tab === 'vacantes'} onClick={() => setTab('vacantes')}>
-                    Vacantes <span className="font-mono text-[11px] text-ink-muted ml-1">{vacantesTodas.length}</span>
+                    Vacantes <span className="font-mono text-[11px] text-ink-muted ml-1">{conteos.vacantes}</span>
                 </TabButton>
                 <TabButton activo={tab === 'feed'} onClick={() => setTab('feed')}>
-                    Publicaciones <span className="font-mono text-[11px] text-ink-muted ml-1">{feedTodo.length}</span>
+                    Publicaciones <span className="font-mono text-[11px] text-ink-muted ml-1">{conteos.feed}</span>
                 </TabButton>
             </div>
 
@@ -174,8 +228,8 @@ export default function Dashboard({ onNavigate }) {
                 <label className="flex flex-col gap-1">
                     <span className="text-[10.5px] font-mono uppercase tracking-wide text-ink-muted">Buscar</span>
                     <input
-                        value={busqueda}
-                        onChange={event => setBusqueda(event.target.value)}
+                        value={filtros.busqueda}
+                        onChange={event => setFiltros(current => ({ ...current, busqueda: event.target.value, pagina: 0 }))}
                         placeholder="Título, empresa o palabra clave…"
                         className={inputClase + ' w-64'}
                     />
@@ -183,40 +237,51 @@ export default function Dashboard({ onNavigate }) {
                 {tab === 'vacantes' && (
                     <label className="flex flex-col gap-1">
                         <span className="text-[10.5px] font-mono uppercase tracking-wide text-ink-muted">Fuente</span>
-                        <select value={fuenteFiltro} onChange={event => setFuenteFiltro(event.target.value)} className={inputClase}>
+                        <select
+                            value={filtrosVacantes.fuente}
+                            onChange={event => setFiltrosVacantes(current => ({ ...current, fuente: event.target.value, pagina: 0 }))}
+                            className={inputClase}
+                        >
                             <option value="">Cualquiera</option>
-                            {(fuentesDisponibles.length ? fuentesDisponibles : FUENTES).map(item => <option key={item} value={item}>{nombreFuente(item)}</option>)}
+                            {FUENTES_VACANTES.map(item => <option key={item} value={item}>{nombreFuente(item)}</option>)}
                         </select>
                     </label>
                 )}
                 {tab === 'vacantes' && (
                     <div className="flex flex-col gap-1">
                         <span className="text-[10.5px] font-mono uppercase tracking-wide text-ink-muted">
-                            Coincidencia: {rangoScore[0]}% – {rangoScore[1]}%
+                            Coincidencia: {filtrosVacantes.rangoScore[0]}% – {filtrosVacantes.rangoScore[1]}%
                         </span>
-                        <RangoScore valor={rangoScore} onChange={setRangoScore} />
+                        <RangoScore
+                            valor={filtrosVacantes.rangoScore}
+                            onChange={rango => setFiltrosVacantes(current => ({ ...current, rangoScore: rango, pagina: 0 }))}
+                        />
                     </div>
                 )}
                 {tab === 'feed' && (
                     <label className="flex flex-col gap-1">
                         <span className="text-[10.5px] font-mono uppercase tracking-wide text-ink-muted">Estado</span>
-                        <select value={decisionFiltro} onChange={event => setDecisionFiltro(event.target.value)} className={inputClase}>
+                        <select
+                            value={filtrosFeed.decision}
+                            onChange={event => setFiltrosFeed(current => ({ ...current, decision: event.target.value, pagina: 0 }))}
+                            className={inputClase}
+                        >
                             <option value="">Cualquiera</option>
                             <option value="REVISAR">Revisar</option>
                             <option value="TAL_VEZ">Tal vez</option>
                         </select>
                     </label>
                 )}
-                {tab === 'vacantes' && pendientesRevisar > 0 && (
+                {tab === 'vacantes' && conteos.pendientes_revisar > 0 && (
                     <label className="flex items-center gap-2 pb-1.5 cursor-pointer select-none">
                         <input
                             type="checkbox"
-                            checked={soloRevisar}
-                            onChange={event => setSoloRevisar(event.target.checked)}
+                            checked={filtrosVacantes.soloRevisar}
+                            onChange={event => setFiltrosVacantes(current => ({ ...current, soloRevisar: event.target.checked, pagina: 0 }))}
                             className="accent-accent w-3.5 h-3.5"
                         />
                         <span className="text-[12.5px] text-ink-secondary">
-                            Solo por revisar <span className="font-mono text-ink-muted">({pendientesRevisar})</span>
+                            Solo por revisar <span className="font-mono text-ink-muted">({conteos.pendientes_revisar})</span>
                         </span>
                     </label>
                 )}
@@ -225,19 +290,19 @@ export default function Dashboard({ onNavigate }) {
                         Limpiar filtros
                     </button>
                 )}
-                <span className="text-[12px] font-mono text-ink-muted ml-auto pb-1.5">{listaActiva.length} resultado(s)</span>
+                <span className="text-[12px] font-mono text-ink-muted ml-auto pb-1.5">{query.total} resultado(s)</span>
             </div>
 
-            {cargando && <p className="text-ink-secondary text-[13.5px] py-8">Cargando ranking…</p>}
-            {!cargando && listaActiva.length === 0 && (
+            {query.cargando && <p className="text-ink-secondary text-[13.5px] py-8">Cargando ranking…</p>}
+            {!query.cargando && query.items.length === 0 && (
                 <p className="text-ink-muted text-[13.5px] text-center py-16">
                     {hayFiltrosActivos ? 'Ningún resultado coincide con los filtros.' : 'Aún no hay resultados. Deposita JSON y pulsa "Procesar JSON".'}
                 </p>
             )}
 
-            {listaActiva.length > 0 && (
+            {query.items.length > 0 && (
                 <div className="border-t border-hairline-strong">
-                    {paginaItems.map(vacante => (
+                    {query.items.map(vacante => (
                         <Fila key={vacante.dedupe_key} vacante={vacante} esFeed={tab === 'feed'} onOpen={setDetalle} />
                     ))}
                 </div>
@@ -246,16 +311,16 @@ export default function Dashboard({ onNavigate }) {
             {totalPaginas > 1 && (
                 <div className="flex justify-center items-center gap-3 mt-6">
                     <button
-                        onClick={() => setPagina(value => Math.max(0, value - 1))}
-                        disabled={paginaSegura === 0}
+                        onClick={() => cambiarPagina(value => Math.max(0, value - 1))}
+                        disabled={filtros.pagina === 0}
                         className="px-3 py-1.5 text-[12.5px] font-medium border border-hairline-strong rounded text-ink-secondary hover:text-ink-primary hover:border-ink-muted disabled:opacity-30 disabled:pointer-events-none transition-colors"
                     >
                         ← Anterior
                     </button>
-                    <span className="text-[12.5px] font-mono text-ink-muted">{paginaSegura + 1} / {totalPaginas}</span>
+                    <span className="text-[12.5px] font-mono text-ink-muted">{filtros.pagina + 1} / {totalPaginas}</span>
                     <button
-                        onClick={() => setPagina(value => Math.min(totalPaginas - 1, value + 1))}
-                        disabled={paginaSegura >= totalPaginas - 1}
+                        onClick={() => cambiarPagina(value => Math.min(totalPaginas - 1, value + 1))}
+                        disabled={filtros.pagina >= totalPaginas - 1}
                         className="px-3 py-1.5 text-[12.5px] font-medium border border-hairline-strong rounded text-ink-secondary hover:text-ink-primary hover:border-ink-muted disabled:opacity-30 disabled:pointer-events-none transition-colors"
                     >
                         Siguiente →

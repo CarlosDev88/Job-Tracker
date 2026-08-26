@@ -9,6 +9,19 @@ TRACKING_PARAMS = {
 }
 
 
+def sanear_estructura(valor):
+    """Corrige caracteres inválidos (surrogates sueltos de emojis rotos que
+    llegan del scraper) en cualquier string/dict/list anidado, para que ni el
+    JSON ni SQLite truenen al guardarlos."""
+    if isinstance(valor, str):
+        return valor.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(valor, dict):
+        return {clave: sanear_estructura(item) for clave, item in valor.items()}
+    if isinstance(valor, list):
+        return [sanear_estructura(item) for item in valor]
+    return valor
+
+
 def normalizar_texto(texto: str | None) -> str:
     if not texto:
         return ""

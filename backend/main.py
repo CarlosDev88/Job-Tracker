@@ -9,7 +9,9 @@ from backend.database import (
     delete_aplicacion,
     get_aplicacion,
     get_aplicaciones,
+    get_conteo_resultados,
     get_perfil_activo,
+    get_resultados,
     get_stats,
     init_db,
     update_estado,
@@ -94,6 +96,36 @@ def filtrar() -> dict:
 @app.get("/pipeline/filtradas")
 def filtradas() -> dict:
     return leer_filtradas()
+
+
+@app.get("/resultados/conteos")
+def conteos_resultados() -> dict:
+    return get_conteo_resultados()
+
+
+@app.get("/resultados")
+def resultados(
+    tipo_resultado: str | None = None,
+    fuente: str | None = None,
+    busqueda: str | None = None,
+    score_min: int | None = None,
+    score_max: int | None = None,
+    solo_revisar: bool = False,
+    decision: str | None = None,
+    pagina: int = 1,
+    por_pagina: int = 20,
+) -> dict:
+    return get_resultados(
+        tipo_resultado=tipo_resultado,
+        fuente=fuente,
+        busqueda=busqueda,
+        score_min=score_min,
+        score_max=score_max,
+        solo_revisar=solo_revisar,
+        decision=decision,
+        pagina=pagina,
+        por_pagina=por_pagina,
+    )
 
 
 @app.post("/aplicaciones", status_code=201)

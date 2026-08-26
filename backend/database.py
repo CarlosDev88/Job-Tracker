@@ -18,8 +18,12 @@ ESTADOS_VALIDOS = {
 
 
 def get_connection() -> sqlite3.Connection:
-    conexion = sqlite3.connect(DB_PATH)
+    conexion = sqlite3.connect(DB_PATH, timeout=30)
     conexion.row_factory = sqlite3.Row
+    # WAL: los lectores (conteos, /resultados, /pipeline/filtradas) no se
+    # bloquean mientras el pipeline hace su transacción larga de upserts.
+    conexion.execute("PRAGMA journal_mode=WAL")
+    conexion.execute("PRAGMA busy_timeout=30000")
     return conexion
 
 
@@ -62,6 +66,28 @@ def _crear_aplicaciones(cursor: sqlite3.Cursor) -> None:
             FOREIGN KEY (perfil_id) REFERENCES perfiles(id)
         )
     """)
+
+
+def _crear_resultados(cursor: sqlite3.Cursor) -> None:
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS resultados (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tipo_resultado TEXT NOT NULL DEFAULT 'vacante',
+            titulo TEXT NOT NULL DEFAULT '',
+            empresa TEXT NOT NULL DEFAULT '',
+            ubicacion TEXT NOT NULL DEFAULT '',
+            descripcion TEXT NOT NULL DEFAULT '',
+            link TEXT NOT NULL DEFAULT '',
+            dedupe_key TEXT NOT NULL UNIQUE,
+            fuente TEXT NOT NULL DEFAULT '',
+            score INTEGER,
+            detalle TEXT NOT NULL DEFAULT '{}',
+            primera_vez TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resultados_tipo ON resultados(tipo_resultado)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_resultados_fuente ON resultados(fuente)")
 
 
 def _migrar_aplicaciones(cursor: sqlite3.Cursor) -> None:
@@ -109,6 +135,7 @@ def init_db() -> None:
     cursor = conexion.cursor()
     _crear_perfiles(cursor)
     _migrar_aplicaciones(cursor)
+    _crear_resultados(cursor)
 
     existe = cursor.execute("SELECT id FROM perfiles WHERE activo = 1 LIMIT 1").fetchone()
     if not existe:
@@ -282,3 +309,150 @@ def get_stats() -> dict:
     )]
     conexion.close()
     return {"total": total, "por_estado": por_estado, "por_fuente": por_fuente}
+
+
+def _sanear_texto(valor):
+    """Corrige texto con caracteres inválidos (p. ej. emojis rotos que quedan
+    como surrogates sueltos al venir de un scraper) para que SQLite no truene
+    al guardarlos."""
+    if not isinstance(valor, str):
+        return valor
+    return valor.encode("utf-8", "replace").decode("utf-8")
+
+
+def _sanear_estructura(valor):
+    if isinstance(valor, str):
+        return _sanear_texto(valor)
+    if isinstance(valor, dict):
+        return {clave: _sanear_estructura(item) for clave, item in valor.items()}
+    if isinstance(valor, list):
+        return [_sanear_estructura(item) for item in valor]
+    return valor
+
+
+def guardar_resultados(resultados: Iterable[dict]) -> None:
+    """Guarda (upsert) los resultados de una corrida del pipeline en la tabla
+    resultados. dedupe_key es UNIQUE: si el mismo aviso/post ya existía de una
+    corrida anterior se actualiza en el lugar (no se duplica), pero conserva
+    su primera_vez original para poder ver el histórico real."""
+    conexion = get_connection()
+    ahora = datetime.now().isoformat()
+    for resultado in resultados:
+        conexion.execute("""
+            INSERT INTO resultados (
+                tipo_resultado, titulo, empresa, ubicacion, descripcion, link,
+                dedupe_key, fuente, score, detalle, primera_vez, actualizado_en
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(dedupe_key) DO UPDATE SET
+                tipo_resultado = excluded.tipo_resultado,
+                titulo = excluded.titulo,
+                empresa = excluded.empresa,
+                ubicacion = excluded.ubicacion,
+                descripcion = excluded.descripcion,
+                link = excluded.link,
+                fuente = excluded.fuente,
+                score = excluded.score,
+                detalle = excluded.detalle,
+                actualizado_en = excluded.actualizado_en
+        """, (
+            resultado.get("tipo_resultado") or "vacante",
+            _sanear_texto(resultado.get("titulo") or ""),
+            _sanear_texto(resultado.get("empresa") or ""),
+            _sanear_texto(resultado.get("ubicacion") or ""),
+            _sanear_texto(resultado.get("descripcion") or ""),
+            _sanear_texto(resultado.get("link") or ""),
+            resultado["dedupe_key"],
+            resultado.get("fuente") or "",
+            resultado.get("score"),
+            json.dumps(_sanear_estructura(resultado.get("detalle") or {}), ensure_ascii=False),
+            ahora, ahora,
+        ))
+    conexion.commit()
+    conexion.close()
+
+
+def get_resultados(
+    tipo_resultado: str | None = None,
+    fuente: str | None = None,
+    busqueda: str | None = None,
+    score_min: int | None = None,
+    score_max: int | None = None,
+    solo_revisar: bool = False,
+    decision: str | None = None,
+    pagina: int = 1,
+    por_pagina: int = 20,
+) -> dict:
+    condiciones, parametros = ["1=1"], []
+
+    if tipo_resultado:
+        condiciones.append("tipo_resultado = ?")
+        parametros.append(tipo_resultado)
+    if fuente:
+        condiciones.append("fuente = ?")
+        parametros.append(fuente)
+    if solo_revisar:
+        condiciones.append("score IS NULL")
+    if score_min is not None:
+        condiciones.append("(score IS NOT NULL AND score >= ?)")
+        parametros.append(score_min)
+    if score_max is not None:
+        condiciones.append("(score IS NOT NULL AND score <= ?)")
+        parametros.append(score_max)
+    if decision:
+        condiciones.append("json_extract(detalle, '$.decision') = ?")
+        parametros.append(decision)
+    if busqueda:
+        terminos = [termino for termino in busqueda.strip().split() if termino]
+        if terminos:
+            partes_termino = []
+            for termino in terminos:
+                comodin = f"%{termino}%"
+                partes_termino.append("(titulo LIKE ? OR empresa LIKE ? OR descripcion LIKE ?)")
+                parametros.extend([comodin, comodin, comodin])
+            condiciones.append("(" + " OR ".join(partes_termino) + ")")
+
+    where = " AND ".join(condiciones)
+    conexion = get_connection()
+
+    total = conexion.execute(f"SELECT COUNT(*) AS count FROM resultados WHERE {where}", parametros).fetchone()["count"]
+
+    pagina = max(1, pagina)
+    por_pagina = max(1, min(por_pagina, 100))
+    offset = (pagina - 1) * por_pagina
+    filas = conexion.execute(f"""
+        SELECT * FROM resultados WHERE {where}
+        ORDER BY (score IS NULL) ASC, score DESC, primera_vez DESC
+        LIMIT ? OFFSET ?
+    """, parametros + [por_pagina, offset]).fetchall()
+
+    items = []
+    for fila in filas:
+        item = dict(fila)
+        try:
+            item["detalle"] = json.loads(item["detalle"])
+        except (TypeError, ValueError):
+            item["detalle"] = {}
+        items.append(item)
+
+    conexion.close()
+
+    tracking = get_tracking_por_claves([item["dedupe_key"] for item in items])
+    for item in items:
+        item["tracking"] = tracking.get(item["dedupe_key"])
+
+    return {"items": items, "total": total, "pagina": pagina, "por_pagina": por_pagina}
+
+
+def get_conteo_resultados() -> dict:
+    conexion = get_connection()
+    vacantes = conexion.execute(
+        "SELECT COUNT(*) AS c FROM resultados WHERE tipo_resultado = 'vacante'"
+    ).fetchone()["c"]
+    feed = conexion.execute(
+        "SELECT COUNT(*) AS c FROM resultados WHERE tipo_resultado = 'feed_post'"
+    ).fetchone()["c"]
+    pendientes_revisar = conexion.execute(
+        "SELECT COUNT(*) AS c FROM resultados WHERE tipo_resultado = 'vacante' AND score IS NULL"
+    ).fetchone()["c"]
+    conexion.close()
+    return {"vacantes": vacantes, "feed": feed, "pendientes_revisar": pendientes_revisar}
