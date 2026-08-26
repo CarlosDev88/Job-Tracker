@@ -1,13 +1,13 @@
-// Para vacantes del feed clasificadas por feed_filter.py (algoritmo_feed.md):
-// su score no es un porcentaje comparable al de keywords.py, así que se
-// muestra la decisión (REVISAR/TAL_VEZ) en vez de forzarla por ScoreBadge.
+// Para publicaciones del feed: no tienen un score comparable, así que se
+// muestra la decisión (REVISAR/TAL_VEZ) como etiqueta, no como medidor.
 export default function DecisionBadge({ decision }) {
-    const estilo = decision === 'REVISAR'
-        ? 'bg-green-950 text-green-400 border-green-900'
-        : 'bg-yellow-950 text-yellow-400 border-yellow-900'
+    const positiva = decision === 'REVISAR'
+    const color = positiva ? 'text-positive-text' : 'text-accent-text'
+    const punto = positiva ? 'bg-positive' : 'bg-accent'
 
     return (
-        <span className={`text-sm border px-2 py-1 rounded shrink-0 ${estilo}`}>
+        <span className={'inline-flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-wide uppercase ' + color}>
+            <span className={'w-1.5 h-1.5 rounded-full ' + punto} />
             {decision}
         </span>
     )

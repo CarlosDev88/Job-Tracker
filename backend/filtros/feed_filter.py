@@ -1,5 +1,6 @@
 import re
 
+from backend.filtros.intencion import detectar_intencion
 from backend.filtros.texto import normalizar_texto
 
 SENAL_CONTRATACION = [
@@ -37,6 +38,12 @@ def extraer_contacto(texto: str) -> tuple[list[str], list[str]]:
 def clasificar_post_feed(descripcion: str) -> dict | None:
     texto = normalizar_texto(descripcion)
     if not es_vacante(texto):
+        return None
+
+    # Un candidato autopromocionándose ("looking for a new opportunity") o un
+    # post social (aniversario, cumpleaños) también puede disparar las señales
+    # de arriba; se descartan antes de puntuar como vacante.
+    if detectar_intencion("", descripcion) in ("CANDIDATO", "RUIDO_SOCIAL"):
         return None
 
     vetos = [veto for veto in VETO if veto in texto]

@@ -2,8 +2,145 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --color-paper: 244 245 242;
+  --color-surface: 255 255 255;
+  --color-hairline: 225 226 221;
+  --color-hairline-strong: 201 203 196;
+  --color-ink-primary: 26 27 24;
+  --color-ink-secondary: 93 95 88;
+  --color-ink-muted: 141 143 135;
+  --color-accent: 156 95 22;
+  --color-accent-hover: 126 76 16;
+  --color-accent-muted: 245 235 219;
+  --color-accent-text: 126 76 16;
+  --color-positive: 63 107 74;
+  --color-positive-muted: 234 240 234;
+  --color-positive-text: 51 87 60;
+  --color-negative: 162 59 51;
+  --color-negative-muted: 245 231 229;
+  --color-negative-text: 138 49 42;
+}
+
+[data-theme='dark'] {
+  --color-paper: 24 23 21;
+  --color-surface: 32 31 28;
+  --color-hairline: 51 49 44;
+  --color-hairline-strong: 68 65 58;
+  --color-ink-primary: 237 234 227;
+  --color-ink-secondary: 179 175 164;
+  --color-ink-muted: 131 126 113;
+  --color-accent: 216 155 74;
+  --color-accent-hover: 232 172 94;
+  --color-accent-muted: 58 43 21;
+  --color-accent-text: 224 168 104;
+  --color-positive: 111 163 125;
+  --color-positive-muted: 30 44 34;
+  --color-positive-text: 143 194 157;
+  --color-negative: 217 112 102;
+  --color-negative-muted: 46 29 26;
+  --color-negative-text: 224 143 134;
+}
+
+html {
+  color-scheme: light;
+}
+[data-theme='dark'] html,
+html[data-theme='dark'] {
+  color-scheme: dark;
+}
+
 body {
-  background-color: #0f0f0f;
-  color: #e5e5e5;
-  font-family: 'Inter', system-ui, sans-serif;
+  background-color: rgb(var(--color-paper));
+  color: rgb(var(--color-ink-primary));
+  font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+::selection {
+  background-color: rgb(var(--color-accent) / 0.2);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--color-hairline-strong));
+  border-radius: 999px;
+  border: 2px solid rgb(var(--color-paper));
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--color-ink-muted));
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgb(var(--color-accent));
+  outline-offset: 2px;
+}
+
+/* Slider de rango doble (coincidencia mínima/máxima en Dashboard) */
+.range-doble {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  pointer-events: none;
+}
+.range-doble::-webkit-slider-runnable-track {
+  background: transparent;
+}
+.range-doble::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  pointer-events: auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  background: rgb(var(--color-surface));
+  border: 2px solid rgb(var(--color-accent));
+  cursor: pointer;
+  margin-top: 0;
+}
+.range-doble::-moz-range-track {
+  background: transparent;
+  border: none;
+}
+.range-doble::-moz-range-thumb {
+  pointer-events: auto;
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: rgb(var(--color-surface));
+  border: 2px solid rgb(var(--color-accent));
+  cursor: pointer;
 }

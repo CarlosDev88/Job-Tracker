@@ -4,6 +4,8 @@ const API = '/api'
 const ESTADOS = ['pendiente', 'aplicado', 'cv_enviado', 'hr_contacto', 'prueba_tecnica', 'entrevista_rrhh', 'entrevista_tecnica', 'oferta', 'rechazado', 'ghosted']
 const ETIQUETAS = { pendiente: 'Guardada', aplicado: 'Aplicada', cv_enviado: 'CV enviado', hr_contacto: 'Contacto RR. HH.', prueba_tecnica: 'Prueba técnica', entrevista_rrhh: 'Entrevista RR. HH.', entrevista_tecnica: 'Entrevista técnica', oferta: 'Oferta recibida', rechazado: 'Rechazada', ghosted: 'Sin respuesta' }
 
+const inputClase = 'bg-surface border border-hairline-strong rounded px-3 py-1.5 text-[13px] text-ink-primary focus:outline-none focus:border-accent transition-colors'
+
 export default function Ofertas() {
     const [ofertas, setOfertas] = useState([])
     const [estado, setEstado] = useState('')
@@ -45,5 +47,85 @@ export default function Ofertas() {
         await cargar()
     }
 
-    return <div className="max-w-5xl"><h1 className="text-xl font-semibold mb-1">Seguimiento de vacantes</h1><p className="text-sm text-zinc-500 mb-4">Las vacantes guardadas y aplicadas permanecen aquí aunque vuelvas a procesar JSON.</p>{error && <p className="bg-red-950 border border-red-900 text-red-200 p-3 rounded text-sm mb-4">{error}</p>}<div className="flex flex-wrap gap-2 mb-4"><select value={estado} onChange={event => setEstado(event.target.value)} className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm"><option value="">Todos los estados</option>{ESTADOS.map(item => <option key={item} value={item}>{ETIQUETAS[item]}</option>)}</select><select value={fuente} onChange={event => setFuente(event.target.value)} className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm"><option value="">Todas las fuentes</option><option value="linkedin_extension">LinkedIn búsqueda</option><option value="linkedin_publicaciones">LinkedIn publicaciones</option><option value="linkedin_feed">LinkedIn feed</option><option value="getonbrd">GetOnBord</option></select></div><div className="space-y-3">{ofertas.map(oferta => <article key={oferta.id} className="bg-zinc-900 border border-zinc-800 rounded p-4"><div className="flex justify-between gap-4"><div className="min-w-0"><a href={oferta.link || undefined} target="_blank" rel="noopener noreferrer" className={'font-medium ' + (oferta.link ? 'hover:text-blue-400' : '')}>{oferta.titulo}</a><p className="text-sm text-zinc-400">{oferta.empresa} {oferta.ubicacion && '· ' + oferta.ubicacion}</p><p className="text-xs text-zinc-500 mt-1">Guardada: {new Date(oferta.fecha_encontrada).toLocaleDateString()} {oferta.fecha_aplicacion && '· Aplicada: ' + new Date(oferta.fecha_aplicacion).toLocaleDateString()}</p><p className="text-sm text-zinc-300 whitespace-pre-wrap mt-3">{oferta.descripcion}</p>{oferta.notas && <p className="text-sm text-yellow-300 mt-3">Notas: {oferta.notas}</p>}</div><div className="shrink-0 flex flex-col gap-2"><select value={oferta.estado} onChange={event => cambiarEstado(oferta.id, event.target.value)} className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs">{ESTADOS.map(item => <option key={item} value={item}>{ETIQUETAS[item]}</option>)}</select><button onClick={() => { setSeleccionada(oferta); setNotas(oferta.notas || '') }} className="text-xs text-blue-300">Editar notas</button><button onClick={() => eliminar(oferta.id)} className="text-xs text-red-300">Eliminar</button></div></div></article>)}{ofertas.length === 0 && <p className="text-zinc-500 text-center py-10">No hay vacantes en este filtro.</p>}</div>{seleccionada && <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-6"><div className="bg-zinc-900 border border-zinc-700 rounded p-5 w-full max-w-lg"><h2 className="font-medium mb-3">{seleccionada.titulo}</h2><textarea value={notas} onChange={event => setNotas(event.target.value)} rows={5} className="w-full bg-zinc-800 border border-zinc-700 rounded p-3 text-sm" placeholder="Notas de seguimiento..." /><div className="flex justify-end gap-2 mt-3"><button onClick={() => setSeleccionada(null)} className="px-3 py-1.5 text-zinc-400">Cancelar</button><button onClick={guardarNotas} className="px-3 py-1.5 bg-blue-600 rounded">Guardar</button></div></div></div>}</div>
+    const grupos = ESTADOS.map(id => ({ id, items: ofertas.filter(o => o.estado === id) })).filter(g => g.items.length > 0 || estado === g.id)
+
+    return (
+        <div>
+            <h2 className="font-semibold text-[26px] tracking-tight text-ink-primary">Seguimiento</h2>
+            <p className="text-[13.5px] text-ink-secondary mt-1 mb-6">Las vacantes guardadas y aplicadas permanecen aquí aunque vuelvas a procesar JSON.</p>
+
+            {error && <p className="bg-negative-muted border border-negative/30 text-negative-text p-3.5 rounded text-[13px] mb-5">{error}</p>}
+
+            <div className="flex flex-wrap gap-2 mb-8">
+                <select value={estado} onChange={event => setEstado(event.target.value)} className={inputClase}>
+                    <option value="">Todos los estados</option>
+                    {ESTADOS.map(item => <option key={item} value={item}>{ETIQUETAS[item]}</option>)}
+                </select>
+                <select value={fuente} onChange={event => setFuente(event.target.value)} className={inputClase}>
+                    <option value="">Todas las fuentes</option>
+                    <option value="linkedin_extension">LinkedIn búsqueda</option>
+                    <option value="linkedin_publicaciones">LinkedIn publicaciones</option>
+                    <option value="linkedin_feed">LinkedIn feed</option>
+                    <option value="getonbrd">GetOnBord</option>
+                </select>
+            </div>
+
+            {ofertas.length === 0 && <p className="text-ink-muted text-[13.5px] text-center py-16">No hay vacantes en este filtro.</p>}
+
+            <div className="space-y-8">
+                {grupos.map(grupo => (
+                    <section key={grupo.id}>
+                        <h3 className="font-mono text-[11px] font-medium uppercase tracking-wide text-ink-muted mb-2 flex items-center gap-2">
+                            {ETIQUETAS[grupo.id]}
+                            <span className="text-ink-muted/70">· {grupo.items.length}</span>
+                        </h3>
+                        <div className="border-t border-hairline-strong">
+                            {grupo.items.map(oferta => (
+                                <article key={oferta.id} className="border-b border-hairline py-4 flex justify-between gap-4">
+                                    <div className="min-w-0">
+                                        <a href={oferta.link || undefined} target="_blank" rel="noopener noreferrer" className={'font-semibold text-[15px] text-ink-primary ' + (oferta.link ? 'hover:text-accent-text' : '')}>
+                                            {oferta.titulo}
+                                        </a>
+                                        <p className="text-[12.5px] text-ink-secondary mt-0.5">{oferta.empresa} {oferta.ubicacion && '· ' + oferta.ubicacion}</p>
+                                        <p className="text-[11px] font-mono text-ink-muted mt-1.5">
+                                            Guardada {new Date(oferta.fecha_encontrada).toLocaleDateString()}
+                                            {oferta.fecha_aplicacion && ' · Aplicada ' + new Date(oferta.fecha_aplicacion).toLocaleDateString()}
+                                        </p>
+                                        <p className="text-[13px] text-ink-secondary whitespace-pre-wrap leading-relaxed mt-3 line-clamp-3 max-w-2xl">{oferta.descripcion}</p>
+                                        {oferta.notas && <p className="text-[13px] text-accent-text mt-3">Notas: {oferta.notas}</p>}
+                                    </div>
+                                    <div className="shrink-0 flex flex-col gap-2 items-end">
+                                        <select value={oferta.estado} onChange={event => cambiarEstado(oferta.id, event.target.value)} className={inputClase + ' text-[12px]'}>
+                                            {ESTADOS.map(item => <option key={item} value={item}>{ETIQUETAS[item]}</option>)}
+                                        </select>
+                                        <button onClick={() => { setSeleccionada(oferta); setNotas(oferta.notas || '') }} className="text-[12px] font-medium text-accent-text hover:text-accent transition-colors">Editar notas</button>
+                                        <button onClick={() => eliminar(oferta.id)} className="text-[12px] font-medium text-negative-text hover:text-negative transition-colors">Eliminar</button>
+                                    </div>
+                                </article>
+                            ))}
+                        </div>
+                    </section>
+                ))}
+            </div>
+
+            {seleccionada && (
+                <div className="fixed inset-0 bg-ink-primary/30 backdrop-blur-[2px] flex items-center justify-center p-6" onClick={() => setSeleccionada(null)}>
+                    <div className="bg-surface border border-hairline-strong rounded shadow-modal p-6 w-full max-w-lg" onClick={event => event.stopPropagation()}>
+                        <h2 className="font-semibold text-[16px] text-ink-primary mb-4">{seleccionada.titulo}</h2>
+                        <textarea
+                            value={notas}
+                            onChange={event => setNotas(event.target.value)}
+                            rows={5}
+                            className="w-full bg-paper border border-hairline-strong rounded p-3.5 text-[13px] text-ink-primary focus:outline-none focus:border-accent transition-colors"
+                            placeholder="Notas de seguimiento…"
+                        />
+                        <div className="flex justify-end gap-2 mt-4">
+                            <button onClick={() => setSeleccionada(null)} className="px-3.5 py-2 text-[13px] font-medium text-ink-secondary hover:text-ink-primary transition-colors">Cancelar</button>
+                            <button onClick={guardarNotas} className="px-3.5 py-2 text-[13px] font-medium bg-accent hover:bg-accent-hover text-white rounded transition-colors">Guardar</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    )
 }

@@ -1,0 +1,15 @@
+# Normaliza finales de linea para que el repo funcione igual en Windows, WSL, macOS y Linux.
+* text=auto eol=lf
+
+# Scripts y archivos que Docker/bash ejecutan: siempre LF (CRLF los rompe).
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+.env.example text eol=lf
+
+# Binarios
+*.db        binary
+*.png       binary
+*.jpg       binary
+*.ico       binary

@@ -51,13 +51,23 @@ def canonicalizar_link(link: str | None) -> str:
     ))
 
 
+def normalizar_titulo_dedupe(titulo: str | None) -> str:
+    """Título normalizado para comparar identidad de vacante, sin la referencia
+    interna del reclutador (REF#1234, Ref. 5678, etc.) que cambia entre reposts
+    del mismo aviso aunque el resto del contenido sea idéntico."""
+    texto = normalizar_texto(titulo)
+    texto = re.sub(r"\bref\.?\s*#?\s*\d+\b", "", texto)
+    return re.sub(r"\s+", " ", texto).strip()
+
+
 def generar_dedupe_key(vacante: dict) -> str:
     link = canonicalizar_link(vacante.get("link"))
     if link:
         base = f"link|{link}"
     else:
+        # No se incluye "fuente": la misma vacante publicada tanto en la búsqueda
+        # de LinkedIn como en publicaciones sueltas debe colapsar a un solo registro.
         base = "|".join([
-            normalizar_texto(vacante.get("fuente")),
             normalizar_texto(vacante.get("titulo")),
             normalizar_texto(vacante.get("empresa")),
             normalizar_texto(vacante.get("descripcion"))[:1000],

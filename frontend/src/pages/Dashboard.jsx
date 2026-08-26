@@ -1,15 +1,30 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import ScoreBadge from '../components/ScoreBadge'
 import DecisionBadge from '../components/DecisionBadge'
+import RevisarBadge from '../components/RevisarBadge'
 
 const API = '/api'
-const POR_PAGINA = 10
+const POR_PAGINA = 15
 const ETIQUETAS_ESTADO = {
     pendiente: 'Guardada', aplicado: 'Aplicada', cv_enviado: 'CV enviado',
     hr_contacto: 'Contacto RR. HH.', prueba_tecnica: 'Prueba técnica',
     entrevista_rrhh: 'Entrevista RR. HH.', entrevista_tecnica: 'Entrevista técnica',
     oferta: 'Oferta recibida', rechazado: 'Rechazada', ghosted: 'Sin respuesta',
 }
+const FUENTES = ['linkedin_extension', 'linkedin_publicaciones', 'linkedin_feed', 'getonbrd']
+// Nombres legibles por fuente: linkedin_extension = resultados de búsqueda de empleos en LinkedIn,
+// linkedin_publicaciones = posts sueltos de LinkedIn que anuncian una vacante,
+// linkedin_feed = feed general de LinkedIn (se clasifica aparte, pestaña Feed),
+// getonbrd = vacantes estructuradas de GetOnBrd.
+const ETIQUETAS_FUENTE = {
+    linkedin_extension: 'Búsqueda de empleos (LinkedIn)',
+    linkedin_publicaciones: 'Publicaciones de vacantes (LinkedIn)',
+    linkedin_feed: 'Feed de LinkedIn',
+    getonbrd: 'GetOnBrd',
+}
+const nombreFuente = valor => ETIQUETAS_FUENTE[valor] || valor
+
+const inputClase = 'bg-surface border border-hairline-strong rounded px-3 py-1.5 text-[13px] text-ink-primary focus:outline-none focus:border-accent transition-colors'
 
 export default function Dashboard({ onNavigate }) {
     const [documento, setDocumento] = useState({ vacantes: [], feed: [], stats: {}, errores: [] })
@@ -19,6 +34,12 @@ export default function Dashboard({ onNavigate }) {
     const [detalle, setDetalle] = useState(null)
     const [guardando, setGuardando] = useState(false)
     const [pagina, setPagina] = useState(0)
+    const [tab, setTab] = useState('vacantes')
+    const [busqueda, setBusqueda] = useState('')
+    const [fuenteFiltro, setFuenteFiltro] = useState('')
+    const [rangoScore, setRangoScore] = useState([0, 100])
+    const [soloRevisar, setSoloRevisar] = useState(false)
+    const [decisionFiltro, setDecisionFiltro] = useState('')
 
     const cargar = async () => {
         try {
@@ -33,6 +54,7 @@ export default function Dashboard({ onNavigate }) {
     }
 
     useEffect(() => { cargar() }, [])
+    useEffect(() => { setPagina(0) }, [tab, busqueda, fuenteFiltro, rangoScore, soloRevisar, decisionFiltro])
 
     const procesar = async () => {
         setProcesando(true)
@@ -41,7 +63,6 @@ export default function Dashboard({ onNavigate }) {
             const respuesta = await fetch(API + '/pipeline/filtrar', { method: 'POST' })
             const data = await respuesta.json()
             if (!respuesta.ok) throw new Error(data.detail || 'No fue posible procesar los JSON')
-            setPagina(0)
             await cargar()
         } catch (err) {
             setError(err.message)
@@ -61,7 +82,7 @@ export default function Dashboard({ onNavigate }) {
                     dedupe_key: vacante.dedupe_key,
                     titulo: vacante.titulo, empresa: vacante.empresa, ubicacion: vacante.ubicacion,
                     descripcion: vacante.descripcion, link: vacante.link, fuente: vacante.fuente,
-                    score: vacante.score, score_detalle: vacante.detalle, estado_inicial: estadoInicial,
+                    score: vacante.score ?? 0, score_detalle: vacante.detalle, estado_inicial: estadoInicial,
                 }),
             })
             const data = await respuesta.json()
@@ -75,53 +96,383 @@ export default function Dashboard({ onNavigate }) {
         }
     }
 
-    const vacantes = documento.vacantes || []
-    const feed = documento.feed || []
-    const totalPaginas = Math.max(1, Math.ceil(vacantes.length / POR_PAGINA))
+    const vacantesTodas = documento.vacantes || []
+    const feedTodo = documento.feed || []
+    const fuentesDisponibles = useMemo(() => {
+        const base = tab === 'vacantes' ? vacantesTodas : feedTodo
+        return Array.from(new Set(base.map(item => item.fuente).filter(Boolean)))
+    }, [tab, vacantesTodas, feedTodo])
+
+    const aplicarFiltros = (lista, { conFuente = true, conScore = false } = {}) => lista.filter(item => {
+        if (conFuente && fuenteFiltro && item.fuente !== fuenteFiltro) return false
+        if (conScore && (item.score < rangoScore[0] || item.score > rangoScore[1])) return false
+        if (busqueda) {
+            const texto = [item.titulo, item.empresa, item.descripcion].filter(Boolean).join(' ').toLowerCase()
+            if (!texto.includes(busqueda.toLowerCase())) return false
+        }
+        return true
+    })
+
+    const pendientesRevisar = useMemo(() => vacantesTodas.filter(item => item.score === null).length, [vacantesTodas])
+    const vacantes = useMemo(() => {
+        const filtradas = aplicarFiltros(vacantesTodas, { conFuente: true, conScore: true })
+        return soloRevisar ? filtradas.filter(item => item.score === null) : filtradas
+    }, [vacantesTodas, fuenteFiltro, rangoScore, busqueda, soloRevisar])
+    const feed = useMemo(() => {
+        const filtradas = aplicarFiltros(feedTodo, { conFuente: false })
+        return decisionFiltro ? filtradas.filter(item => item.detalle?.decision === decisionFiltro) : filtradas
+    }, [feedTodo, busqueda, decisionFiltro])
+
+    const listaActiva = tab === 'vacantes' ? vacantes : feed
+    const totalPaginas = Math.max(1, Math.ceil(listaActiva.length / POR_PAGINA))
     const paginaSegura = Math.min(pagina, totalPaginas - 1)
-    const paginaItems = vacantes.slice(paginaSegura * POR_PAGINA, (paginaSegura + 1) * POR_PAGINA)
+    const paginaItems = listaActiva.slice(paginaSegura * POR_PAGINA, (paginaSegura + 1) * POR_PAGINA)
+    const hayFiltrosActivos = busqueda || fuenteFiltro || rangoScore[0] > 0 || rangoScore[1] < 100 || soloRevisar || decisionFiltro
+    const limpiarFiltros = () => { setBusqueda(''); setFuenteFiltro(''); setRangoScore([0, 100]); setSoloRevisar(false); setDecisionFiltro('') }
 
     return (
-        <div className="max-w-6xl mx-auto">
-            <div className="flex items-center justify-between gap-4 mb-6">
-                <div><h1 className="text-xl font-semibold">Dashboard</h1><p className="text-sm text-zinc-500">Procesa JSON y guarda solo las oportunidades que quieras seguir.</p></div>
-                <button onClick={procesar} disabled={procesando} className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 rounded disabled:opacity-50">{procesando ? 'Procesando...' : 'Procesar JSON'}</button>
+        <div>
+            <div className="flex items-start justify-between gap-6 mb-1">
+                <div>
+                    <h2 className="font-semibold text-[26px] tracking-tight text-ink-primary">Vacantes procesadas</h2>
+                    <p className="text-[13.5px] text-ink-secondary mt-1">Procesa los JSON del scraper y decide qué oportunidades seguir.</p>
+                </div>
+                <button
+                    onClick={procesar}
+                    disabled={procesando}
+                    className="shrink-0 inline-flex items-center gap-2 px-4 py-2 text-[13.5px] font-medium bg-accent text-white rounded hover:bg-accent-hover transition disabled:opacity-50 disabled:pointer-events-none"
+                >
+                    Procesar JSON
+                </button>
             </div>
+
             {error && <Mensaje tipo="error">{error}</Mensaje>}
             {documento.errores?.length > 0 && <Mensaje tipo="warning">Se omitieron {documento.errores.length} archivo(s) inválidos.</Mensaje>}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-                <Stat label="Resultados" value={vacantes.length + feed.length} />
-                <Stat label="Vacantes" value={vacantes.length} />
-                <Stat label="Feed" value={feed.length} />
-                <Stat label="Duplicadas" value={documento.stats?.duplicadas || 0} />
+
+            <div className="grid grid-cols-3 sm:flex sm:items-stretch mt-6 mb-8 border border-hairline rounded overflow-hidden bg-surface">
+                <Stat label="Resultados" value={vacantesTodas.length + feedTodo.length} />
+                <Stat label="Vacantes" value={vacantesTodas.length} />
+                <Stat label="Feed" value={feedTodo.length} ultimo />
             </div>
-            {cargando && <p className="text-zinc-400">Cargando ranking...</p>}
-            {!cargando && !vacantes.length && !feed.length && <p className="text-zinc-500 text-center py-12">Aún no hay resultados. Deposita JSON y pulsa “Procesar JSON”.</p>}
-            <Seccion titulo={'Vacantes estructuradas (' + vacantes.length + ')'}>{paginaItems.map(vacante => <Tarjeta key={vacante.dedupe_key} vacante={vacante} onOpen={setDetalle} />)}</Seccion>
-            {totalPaginas > 1 && <div className="flex justify-center items-center gap-3 mt-4"><button onClick={() => setPagina(value => Math.max(0, value - 1))} disabled={paginaSegura === 0} className="px-3 py-1 bg-zinc-800 rounded disabled:opacity-40">← Anterior</button><span className="text-sm text-zinc-400">Página {paginaSegura + 1} de {totalPaginas}</span><button onClick={() => setPagina(value => Math.min(totalPaginas - 1, value + 1))} disabled={paginaSegura >= totalPaginas - 1} className="px-3 py-1 bg-zinc-800 rounded disabled:opacity-40">Siguiente →</button></div>}
-            <Seccion titulo={'Publicaciones del feed (' + feed.length + ')'}><p className="text-sm text-zinc-500 mb-3">Estas publicaciones no usan la misma escala porcentual que las vacantes estructuradas.</p>{feed.map(vacante => <Tarjeta key={vacante.dedupe_key} vacante={vacante} onOpen={setDetalle} />)}</Seccion>
-            {detalle && <Detalle vacante={detalle} guardando={guardando} onClose={() => setDetalle(null)} onGuardar={guardar} onTracking={() => onNavigate('ofertas')} />}
+
+            <div className="flex items-center gap-1 border-b border-hairline-strong mb-4">
+                <TabButton activo={tab === 'vacantes'} onClick={() => setTab('vacantes')}>
+                    Vacantes <span className="font-mono text-[11px] text-ink-muted ml-1">{vacantesTodas.length}</span>
+                </TabButton>
+                <TabButton activo={tab === 'feed'} onClick={() => setTab('feed')}>
+                    Publicaciones <span className="font-mono text-[11px] text-ink-muted ml-1">{feedTodo.length}</span>
+                </TabButton>
+            </div>
+
+            {tab === 'feed' && (
+                <p className="text-[12.5px] text-ink-muted mb-4">
+                    Estas publicaciones no usan la misma escala porcentual que las vacantes.
+                </p>
+            )}
+
+            <div className="flex flex-wrap items-end gap-3 mb-2">
+                <label className="flex flex-col gap-1">
+                    <span className="text-[10.5px] font-mono uppercase tracking-wide text-ink-muted">Buscar</span>
+                    <input
+                        value={busqueda}
+                        onChange={event => setBusqueda(event.target.value)}
+                        placeholder="Título, empresa o palabra clave…"
+                        className={inputClase + ' w-64'}
+                    />
+                </label>
+                {tab === 'vacantes' && (
+                    <label className="flex flex-col gap-1">
+                        <span className="text-[10.5px] font-mono uppercase tracking-wide text-ink-muted">Fuente</span>
+                        <select value={fuenteFiltro} onChange={event => setFuenteFiltro(event.target.value)} className={inputClase}>
+                            <option value="">Cualquiera</option>
+                            {(fuentesDisponibles.length ? fuentesDisponibles : FUENTES).map(item => <option key={item} value={item}>{nombreFuente(item)}</option>)}
+                        </select>
+                    </label>
+                )}
+                {tab === 'vacantes' && (
+                    <div className="flex flex-col gap-1">
+                        <span className="text-[10.5px] font-mono uppercase tracking-wide text-ink-muted">
+                            Coincidencia: {rangoScore[0]}% – {rangoScore[1]}%
+                        </span>
+                        <RangoScore valor={rangoScore} onChange={setRangoScore} />
+                    </div>
+                )}
+                {tab === 'feed' && (
+                    <label className="flex flex-col gap-1">
+                        <span className="text-[10.5px] font-mono uppercase tracking-wide text-ink-muted">Estado</span>
+                        <select value={decisionFiltro} onChange={event => setDecisionFiltro(event.target.value)} className={inputClase}>
+                            <option value="">Cualquiera</option>
+                            <option value="REVISAR">Revisar</option>
+                            <option value="TAL_VEZ">Tal vez</option>
+                        </select>
+                    </label>
+                )}
+                {tab === 'vacantes' && pendientesRevisar > 0 && (
+                    <label className="flex items-center gap-2 pb-1.5 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={soloRevisar}
+                            onChange={event => setSoloRevisar(event.target.checked)}
+                            className="accent-accent w-3.5 h-3.5"
+                        />
+                        <span className="text-[12.5px] text-ink-secondary">
+                            Solo por revisar <span className="font-mono text-ink-muted">({pendientesRevisar})</span>
+                        </span>
+                    </label>
+                )}
+                {hayFiltrosActivos && (
+                    <button onClick={limpiarFiltros} className="text-[12.5px] font-medium text-accent-text hover:text-accent transition-colors px-1 pb-1.5">
+                        Limpiar filtros
+                    </button>
+                )}
+                <span className="text-[12px] font-mono text-ink-muted ml-auto pb-1.5">{listaActiva.length} resultado(s)</span>
+            </div>
+
+            {cargando && <p className="text-ink-secondary text-[13.5px] py-8">Cargando ranking…</p>}
+            {!cargando && listaActiva.length === 0 && (
+                <p className="text-ink-muted text-[13.5px] text-center py-16">
+                    {hayFiltrosActivos ? 'Ningún resultado coincide con los filtros.' : 'Aún no hay resultados. Deposita JSON y pulsa "Procesar JSON".'}
+                </p>
+            )}
+
+            {listaActiva.length > 0 && (
+                <div className="border-t border-hairline-strong">
+                    {paginaItems.map(vacante => (
+                        <Fila key={vacante.dedupe_key} vacante={vacante} esFeed={tab === 'feed'} onOpen={setDetalle} />
+                    ))}
+                </div>
+            )}
+
+            {totalPaginas > 1 && (
+                <div className="flex justify-center items-center gap-3 mt-6">
+                    <button
+                        onClick={() => setPagina(value => Math.max(0, value - 1))}
+                        disabled={paginaSegura === 0}
+                        className="px-3 py-1.5 text-[12.5px] font-medium border border-hairline-strong rounded text-ink-secondary hover:text-ink-primary hover:border-ink-muted disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                    >
+                        ← Anterior
+                    </button>
+                    <span className="text-[12.5px] font-mono text-ink-muted">{paginaSegura + 1} / {totalPaginas}</span>
+                    <button
+                        onClick={() => setPagina(value => Math.min(totalPaginas - 1, value + 1))}
+                        disabled={paginaSegura >= totalPaginas - 1}
+                        className="px-3 py-1.5 text-[12.5px] font-medium border border-hairline-strong rounded text-ink-secondary hover:text-ink-primary hover:border-ink-muted disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                    >
+                        Siguiente →
+                    </button>
+                </div>
+            )}
+
+            {detalle && (
+                <Detalle
+                    vacante={detalle}
+                    guardando={guardando}
+                    onClose={() => setDetalle(null)}
+                    onGuardar={guardar}
+                    onTracking={() => onNavigate('ofertas')}
+                />
+            )}
+
+            {procesando && <OverlayProcesando />}
         </div>
     )
 }
 
-function Seccion({ titulo, children }) { return <section className="mb-8"><h2 className="text-sm font-medium text-zinc-400 mb-3">{titulo}</h2><div className="grid grid-cols-1 md:grid-cols-2 gap-4">{children}</div></section> }
+function OverlayProcesando() {
+    return (
+        <div className="fixed inset-0 bg-paper/80 backdrop-blur-sm flex flex-col items-center justify-center z-[60] gap-4">
+            <span className="w-10 h-10 border-2 border-hairline-strong border-t-accent rounded-full animate-spin" />
+            <div className="text-center">
+                <p className="text-[14px] font-medium text-ink-primary">Procesando JSON…</p>
+                <p className="text-[12.5px] text-ink-muted mt-1">Leyendo, normalizando y puntuando las vacantes nuevas.</p>
+            </div>
+        </div>
+    )
+}
 
-function Tarjeta({ vacante, onOpen }) {
-    return <button onClick={() => onOpen(vacante)} className="text-left bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded p-4 transition-colors"><div className="flex gap-2 items-center mb-2">{vacante.tipo_resultado === 'feed_post' ? <DecisionBadge decision={vacante.detalle?.decision} /> : <ScoreBadge score={vacante.score} />}<span className="text-xs text-zinc-500 ml-auto truncate">{vacante.fuente}</span></div><div className="font-medium truncate">{vacante.titulo || '(sin título)'}</div>{vacante.empresa && <div className="text-sm text-zinc-500">{vacante.empresa}</div>}{vacante.tracking && <div className="text-xs text-blue-300 mt-2">✓ {ETIQUETAS_ESTADO[vacante.tracking.estado]}</div>}<p className="text-sm text-zinc-300 line-clamp-3 whitespace-pre-wrap mt-2">{vacante.descripcion}</p></button>
+function RangoScore({ valor, onChange }) {
+    const [desde, hasta] = valor
+
+    const cambiarDesde = event => {
+        const nuevo = Math.min(Number(event.target.value), hasta - 1)
+        onChange([nuevo, hasta])
+    }
+    const cambiarHasta = event => {
+        const nuevo = Math.max(Number(event.target.value), desde + 1)
+        onChange([desde, nuevo])
+    }
+
+    return (
+        <div className="relative h-6 w-56 flex items-center">
+            <div className="absolute inset-x-0 h-1 rounded-full bg-hairline-strong" />
+            <div
+                className="absolute h-1 rounded-full bg-accent"
+                style={{ left: desde + '%', right: (100 - hasta) + '%' }}
+            />
+            <input
+                type="range"
+                min={0}
+                max={100}
+                value={desde}
+                onChange={cambiarDesde}
+                className="range-doble"
+                aria-label="Coincidencia mínima"
+            />
+            <input
+                type="range"
+                min={0}
+                max={100}
+                value={hasta}
+                onChange={cambiarHasta}
+                className="range-doble"
+                aria-label="Coincidencia máxima"
+            />
+        </div>
+    )
+}
+
+function TabButton({ activo, onClick, children }) {
+    return (
+        <button
+            onClick={onClick}
+            className={
+                'px-1 mr-6 py-2.5 text-[13.5px] font-medium border-b-2 -mb-px transition-colors ' +
+                (activo ? 'border-accent text-ink-primary' : 'border-transparent text-ink-muted hover:text-ink-secondary')
+            }
+        >
+            {children}
+        </button>
+    )
+}
+
+function Fila({ vacante, esFeed, onOpen }) {
+    return (
+        <button
+            onClick={() => onOpen(vacante)}
+            className="w-full text-left border-b border-hairline hover:bg-accent-muted/40 transition-colors px-2 py-3.5 flex flex-col sm:flex-row gap-2 sm:gap-4 sm:items-start group"
+        >
+            <div className="sm:w-24 pt-0.5 shrink-0">
+                {esFeed ? <DecisionBadge decision={vacante.detalle?.decision} /> : vacante.score === null ? <RevisarBadge /> : <ScoreBadge score={vacante.score} />}
+            </div>
+            <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                    <span className="font-medium text-[15.5px] text-ink-primary group-hover:text-accent-text transition-colors">
+                        {vacante.titulo || '(sin título)'}
+                    </span>
+                    {vacante.empresa && <span className="text-[12.5px] text-ink-secondary shrink-0">— {vacante.empresa}</span>}
+                </div>
+                <p className="text-[13px] text-ink-secondary line-clamp-2 leading-relaxed mt-1 max-w-3xl">{vacante.descripcion}</p>
+                <div className="flex items-center gap-3 mt-2">
+                    {vacante.tracking && (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-mono text-accent-text">
+                            ✓ {ETIQUETAS_ESTADO[vacante.tracking.estado]}
+                        </span>
+                    )}
+                    <span className="font-mono text-[10.5px] text-ink-muted uppercase tracking-wide sm:hidden">{vacante.fuente}</span>
+                </div>
+            </div>
+            <span className="hidden sm:block font-mono text-[10.5px] text-ink-muted uppercase tracking-wide shrink-0 pt-0.5 w-32 text-right">{vacante.fuente}</span>
+        </button>
+    )
 }
 
 function Detalle({ vacante, guardando, onClose, onGuardar, onTracking }) {
     const tracking = vacante.tracking
-    return <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6" onClick={onClose}><div className="bg-zinc-900 border border-zinc-700 rounded-lg p-6 w-full max-w-4xl max-h-[85vh] overflow-auto" onClick={event => event.stopPropagation()}><div className="flex justify-between gap-4 mb-2"><h3 className="text-xl font-semibold">{vacante.titulo || '(revisar manualmente)'}</h3>{vacante.tipo_resultado === 'feed_post' ? <DecisionBadge decision={vacante.detalle?.decision} /> : <ScoreBadge score={vacante.score} />}</div><p className="text-zinc-400 mb-4">{vacante.empresa} {vacante.ubicacion && '· ' + vacante.ubicacion}</p>{vacante.contactos?.emails?.length > 0 && <div className="mb-3 text-sm">{vacante.contactos.emails.map(email => <a key={email} href={'mailto:' + email} className="text-blue-400 block">{email}</a>)}</div>}{vacante.imagenes?.length > 0 && <div className="flex flex-wrap gap-3 mb-4">{vacante.imagenes.map(url => <img key={url} src={url} alt="" className="max-h-72 rounded border border-zinc-800" />)}</div>}<StackBreakdown detalle={vacante.detalle} /><p className="whitespace-pre-wrap text-zinc-200 leading-7 mb-6">{vacante.descripcion}</p><div className="flex flex-wrap justify-end gap-2"><button onClick={onClose} className="px-3 py-1.5 text-zinc-400">Cerrar</button><button onClick={() => navigator.clipboard.writeText(vacante.titulo + '\n\n' + vacante.descripcion)} className="px-3 py-1.5 bg-zinc-700 rounded">Copiar empleo</button>{vacante.link && <a href={vacante.link} target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 bg-zinc-700 rounded">Ir a la vacante</a>}{tracking ? <button onClick={onTracking} className="px-3 py-1.5 bg-blue-600 rounded">Ver tracking: {ETIQUETAS_ESTADO[tracking.estado]}</button> : <><button disabled={guardando} onClick={() => onGuardar(vacante, 'pendiente')} className="px-3 py-1.5 bg-zinc-700 rounded disabled:opacity-50">Guardar</button><button disabled={guardando} onClick={() => onGuardar(vacante, 'aplicado')} className="px-3 py-1.5 bg-green-600 rounded disabled:opacity-50">Guardar como aplicada</button></>}</div></div></div>
+    return (
+        <div className="fixed inset-0 bg-ink-primary/30 backdrop-blur-[2px] flex items-center justify-center z-50 p-6" onClick={onClose}>
+            <div
+                className="bg-surface border border-hairline-strong rounded shadow-modal p-8 w-full max-w-3xl max-h-[85vh] overflow-auto"
+                onClick={event => event.stopPropagation()}
+            >
+                <div className="flex justify-between gap-4 mb-1">
+                    <h3 className="font-semibold text-[22px] text-ink-primary leading-snug">{vacante.titulo || '(revisar manualmente)'}</h3>
+                    <button onClick={onClose} className="shrink-0 w-8 h-8 flex items-center justify-center rounded text-ink-muted hover:text-ink-primary hover:bg-paper transition-colors text-lg">✕</button>
+                </div>
+                <div className="flex items-center gap-3 mb-5">
+                    {vacante.tipo_resultado === 'feed_post' ? <DecisionBadge decision={vacante.detalle?.decision} /> : vacante.score === null ? <RevisarBadge /> : <ScoreBadge score={vacante.score} />}
+                    <p className="text-[13px] text-ink-secondary">{vacante.empresa} {vacante.ubicacion && '· ' + vacante.ubicacion}</p>
+                </div>
+                {vacante.contactos?.emails?.length > 0 && (
+                    <div className="mb-4 text-[13px] space-y-0.5">
+                        {vacante.contactos.emails.map(email => (
+                            <a key={email} href={'mailto:' + email} className="text-accent-text hover:text-accent block">{email}</a>
+                        ))}
+                    </div>
+                )}
+                {vacante.imagenes?.length > 0 && (
+                    <div className="flex flex-wrap gap-3 mb-5">
+                        {vacante.imagenes.map(url => <img key={url} src={url} alt="" className="max-h-72 rounded border border-hairline" />)}
+                    </div>
+                )}
+                <StackBreakdown detalle={vacante.detalle} />
+                <p className="whitespace-pre-wrap text-[13.5px] text-ink-secondary leading-7 mb-7 border-t border-hairline pt-5">{vacante.descripcion}</p>
+                <div className="flex flex-wrap justify-end gap-2 pt-5 border-t border-hairline-strong">
+                    <button onClick={onClose} className="px-3.5 py-2 text-[13px] font-medium text-ink-secondary hover:text-ink-primary transition-colors">Cerrar</button>
+                    <button
+                        onClick={() => navigator.clipboard.writeText(vacante.titulo + '\n\n' + vacante.descripcion)}
+                        className="px-3.5 py-2 text-[13px] font-medium border border-hairline-strong hover:border-ink-muted rounded text-ink-primary transition-colors"
+                    >
+                        Copiar empleo
+                    </button>
+                    {vacante.link && (
+                        <a href={vacante.link} target="_blank" rel="noopener noreferrer" className="px-3.5 py-2 text-[13px] font-medium border border-hairline-strong hover:border-ink-muted rounded text-ink-primary transition-colors">
+                            Ir a la vacante
+                        </a>
+                    )}
+                    {tracking ? (
+                        <button onClick={onTracking} className="px-3.5 py-2 text-[13px] font-medium bg-accent text-white hover:bg-accent-hover rounded transition-colors">
+                            Ver tracking: {ETIQUETAS_ESTADO[tracking.estado]}
+                        </button>
+                    ) : (
+                        <>
+                            <button disabled={guardando} onClick={() => onGuardar(vacante, 'pendiente')} className="px-3.5 py-2 text-[13px] font-medium border border-hairline-strong hover:border-ink-muted rounded text-ink-primary transition-colors disabled:opacity-50">
+                                Guardar
+                            </button>
+                            <button disabled={guardando} onClick={() => onGuardar(vacante, 'aplicado')} className="px-3.5 py-2 text-[13px] font-medium bg-positive hover:bg-positive-text text-white rounded transition-colors disabled:opacity-50">
+                                Guardar como aplicada
+                            </button>
+                        </>
+                    )}
+                </div>
+            </div>
+        </div>
+    )
 }
 
 function StackBreakdown({ detalle }) {
     const positivos = detalle?.positivos || []
     const gaps = detalle?.gaps_blandos || []
     if (!positivos.length && !gaps.length) return null
-    return <div className="grid md:grid-cols-2 gap-3 mb-5 text-sm">{positivos.length > 0 && <div className="bg-green-950/40 border border-green-900 rounded p-3"><strong className="text-green-400">Coincidencias</strong><p className="mt-1 text-zinc-300">{positivos.map(item => item.keyword).join(', ')}</p></div>}{gaps.length > 0 && <div className="bg-yellow-950/40 border border-yellow-900 rounded p-3"><strong className="text-yellow-400">Deseables no cumplidos</strong><p className="mt-1 text-zinc-300">{gaps.map(item => item.keyword).join(', ')}</p></div>}</div>
+    return (
+        <div className="grid md:grid-cols-2 gap-x-8 gap-y-3 mb-6 text-[13px] border-t border-hairline pt-5">
+            {positivos.length > 0 && (
+                <div>
+                    <strong className="text-positive-text text-[11px] font-mono font-medium uppercase tracking-wide">Coincidencias</strong>
+                    <p className="mt-1.5 text-ink-secondary leading-relaxed">{positivos.map(item => item.keyword).join(', ')}</p>
+                </div>
+            )}
+            {gaps.length > 0 && (
+                <div>
+                    <strong className="text-accent-text text-[11px] font-mono font-medium uppercase tracking-wide">Deseables no cumplidos</strong>
+                    <p className="mt-1.5 text-ink-secondary leading-relaxed">{gaps.map(item => item.keyword).join(', ')}</p>
+                </div>
+            )}
+        </div>
+    )
 }
 
-function Stat({ label, value }) { return <div className="bg-zinc-900 border border-zinc-800 rounded p-3"><div className="text-xs text-zinc-400">{label}</div><div className="text-2xl font-semibold">{value}</div></div> }
-function Mensaje({ tipo, children }) { return <div className={(tipo === 'error' ? 'bg-red-950 border-red-900 text-red-200' : 'bg-yellow-950 border-yellow-900 text-yellow-200') + ' border rounded p-3 text-sm mb-4'}>{children}</div> }
+function Stat({ label, value, ultimo }) {
+    return (
+        <div className={'sm:flex-1 px-5 py-3.5 border-b sm:border-b-0 border-hairline' + (ultimo ? ' sm:border-r-0' : ' sm:border-r')}>
+            <div className="text-[10.5px] font-mono uppercase tracking-wide text-ink-muted">{label}</div>
+            <div className="font-semibold text-[24px] tabular text-ink-primary mt-0.5">{value}</div>
+        </div>
+    )
+}
+
+function Mensaje({ tipo, children }) {
+    const estilo = tipo === 'error'
+        ? 'bg-negative-muted border-negative/30 text-negative-text'
+        : 'bg-accent-muted border-accent/30 text-accent-text'
+    return <div className={estilo + ' border rounded p-3.5 text-[13px] mb-5 mt-4'}>{children}</div>
+}
